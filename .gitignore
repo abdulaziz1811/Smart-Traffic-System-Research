@@ -1,5 +1,9 @@
+# التجاهل التام للمجلدات الكبيرة والملفات غير الضرورية
+DETRAC-MOT-toolkit/
+data/
+models/weights/
 venv/
-*.pt
-*.pyc
-__pycache__/
+*.mp4
+*.xml
+*.m
 .DS_Store
