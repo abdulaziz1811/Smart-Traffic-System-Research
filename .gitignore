@@ -7,3 +7,5 @@ venv/
 *.xml
 *.m
 .DS_Store
+models/rl_agents/*.zip
+!models/rl_agents/final_ppo_agent.zip

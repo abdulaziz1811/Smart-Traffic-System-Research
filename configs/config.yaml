@@ -83,3 +83,22 @@ rl:
   arrival_rates: [0.3, 0.5, 0.2, 0.4]
   service_rate: 0.8
   switch_penalty: -2.0
+
+# ── Reinforcement Learning (RL) ──────────────────────────
+rl:
+  # بيئة المحاكاة
+  num_approaches: 4         # عدد المسارات (شمال، جنوب، شرق، غرب)
+  num_phases: 4             # عدد حالات الإشارة
+  max_steps: 3600           # مدة المحاكاة (ثانية) = 1 ساعة
+  min_green: 10             # أقل وقت للإشارة الخضراء
+  max_green: 60             # أقصى وقت للإشارة الخضراء
+  arrival_rates: [0.08, 0.08, 0.04, 0.04] # معدل وصول السيارات (N, S, E, W)
+  service_rate: 0.5         # معدل تصريف السيارات
+  switch_penalty: -2.0      # عقوبة تغيير الإشارة (لمنع التذبذب)
+
+  # تدريب الوكيل (Agent)
+  total_timesteps: 100000   # إجمالي خطوات التدريب
+  learning_rate: 0.0003     # سرعة التعلم
+  gamma: 0.99               # عامل الخصم (Discount Factor)
+  n_steps: 2048             # خطوات التحديث
+  batch_size: 64            # حجم الدفعة

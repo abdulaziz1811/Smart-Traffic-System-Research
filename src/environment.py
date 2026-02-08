@@ -76,29 +76,74 @@ class TrafficSignalEnv(gym.Env):
         return self._obs(), self._info()
 
     def step(self, action):
-        self.step_n += 1; old = self.phase
+        self.step_n += 1
+        old_phase = self.phase
+        
+        # تنفيذ القرار (0: Keep, 1: Next, 2: Switch logic)
         if action == 1 and self.timer >= self.min_green:
             self.phase = (self.phase + 1) % self.n_phase
         elif action == 2 and self.timer >= self.min_green:
+            # ذكاء إضافي: الانتقال للمرحلة ذات الطلب الأعلى
             demands = [sum(self.queues[a] for a in self.green_map[p]) for p in range(self.n_phase)]
             self.phase = int(np.argmax(demands))
-        if self.phase != old: self.timer = 0; self.switches += 1
-        else: self.timer += 1
+            
+        # تحديث المؤقتات
+        if self.phase != old_phase:
+            self.timer = 0
+            self.switches += 1
+        else:
+            self.timer += 1
+            
+        # الانتقال الإجباري إذا تجاوزنا الحد الأقصى
         if self.timer >= self.max_green:
-            self.phase = (self.phase + 1) % self.n_phase; self.timer = 0; self.switches += 1
+            self.phase = (self.phase + 1) % self.n_phase
+            self.timer = 0
+            self.switches += 1
 
-        self.queues += self.np_random.poisson(self.arrivals)
-        served = 0.
-        for a in self.green_map[self.phase]:
-            s = min(self.queues[a], self.service); self.queues[a] -= s; served += s
+        # محاكاة وصول ومغادرة السيارات
+        arrivals = self.np_random.poisson(self.arrivals)
+        self.queues += arrivals
+        
+        # السيارات التي يتم خدمتها (التي تمر)
+        served = 0.0
+        active_approaches = self.green_map[self.phase]
+        for a in active_approaches:
+            s = min(self.queues[a], self.service)
+            self.queues[a] -= s
+            served += s
+            # السيارات التي مرت تصفر وقت انتظارها
+            # ملاحظة: لتبسيط المحاكاة نفترض أن المغادرين هم من كانوا ينتظرون
+             # هنا تقريب بسيط: نقلل مجموع أوقات الانتظار بنسبة المغادرين
+            if self.queues[a] > 0:
+                 self.waits[a] *= (1.0 - s/ (self.queues[a] + s))
+            else:
+                 self.waits[a] = 0
+
         self.queues = np.maximum(self.queues, 0)
-        self.total_served += served; self.waits += self.queues
+        
+        # تحديث أوقات الانتظار للباقين
+        # كل سيارة باقية تزيد وقت انتظارها دقيقة واحدة (أو خطوة واحدة)
+        self.waits += self.queues 
+        
+        self.total_served += served
 
-        reward = -self.queues.sum() + 0.5 * served
-        if self.phase != old: reward += self.switch_pen
-        return self._obs(), float(reward), False, self.step_n >= self.max_steps, self._info()
+        # ── 🔥 دالة المكافأة الذكية الجديدة 🔥 ──
+        # 1. عقوبة على طول الطابور (Pressure)
+        queue_penalty = -np.sum(self.queues)
+        
+        # 2. عقوبة على إجمالي وقت الانتظار (Wait Time)
+        # هذا يمنع الوكيل من تجاهل مسار قليل السيارات لفترة طويلة
+        wait_penalty = -np.sum(self.waits) * 0.1  # وزن 0.1 حتى لا يطغى على الطابور
+        
+        # 3. عقوبة تغيير الإشارة (للتقليل من التذبذب)
+        switch_pen = self.switch_pen if self.phase != old_phase else 0.0
+        
+        reward = queue_penalty + wait_penalty + switch_pen + served
 
-    def set_detection_counts(self, counts: Dict[int, int]):
+        terminated = False
+        truncated = self.step_n >= self.max_steps
+        
+        return self._obs(), float(reward), terminated, truncated, self._info()
         """Override queues with real detection counts from the model."""
         for a, c in counts.items():
             if 0 <= a < self.n_app: self.queues[a] = float(c)
