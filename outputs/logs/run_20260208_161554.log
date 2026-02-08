@@ -1,0 +1,5 @@
+[2026-02-08 16:15:54] INFO — Seed: 42
+[2026-02-08 16:15:55] INFO — Device: Apple MPS
+[2026-02-08 16:15:55] INFO — Loading: models/weights/final_model
+[2026-02-08 16:15:56] INFO — Params: 41,502,409 total, 41,502,409 trainable
+[2026-02-08 16:15:57] INFO — img01294.jpg: 10 detections

@@ -1,0 +1,5 @@
+[2026-02-08 16:32:27] INFO — Seed: 42
+[2026-02-08 16:32:27] INFO — Device: Apple MPS
+[2026-02-08 16:32:27] INFO — Creating Traffic Signal Environment...
+[2026-02-08 16:32:27] INFO — Environment is valid! ✅
+[2026-02-08 16:32:27] INFO — Starting RL Training... (This takes time)

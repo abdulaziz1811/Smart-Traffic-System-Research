@@ -8,17 +8,13 @@ State:  queue_lengths + phase_one_hot + timer + waiting_times
 Action: 0=keep | 1=next_phase | 2=demand_switch
 Reward: −queues − switch_penalty + service_bonus
 """
-
 import logging
 from typing import Dict
 import numpy as np
 
-try:
-    import gymnasium as gym
-    from gymnasium import spaces
-except ImportError:
-    import gym
-    from gym import spaces
+# استيراد gymnasium مباشرة لأنه هو المعتمد الآن
+import gymnasium as gym
+from gymnasium import spaces
 
 log = logging.getLogger("traffic")
 
@@ -53,8 +49,22 @@ class TrafficSignalEnv(gym.Env):
         self.total_served = self.switches = 0
 
     def _obs(self):
-        oh = np.zeros(self.n_phase, np.float32); oh[self.phase] = 1.
-        return np.concatenate([self.queues, oh, [self.timer], self.waits])
+        # 1. حالة الطوابير (Queues)
+        obs = [self.queues]
+        
+        # 2. حالة الإشارة (One-hot encoding for phase)
+        phase_oh = np.zeros(self.n_phase)
+        phase_oh[self.phase] = 1
+        obs.append(phase_oh)
+        
+        # 3. المؤقت (Timer)
+        obs.append([self.timer])
+        
+        # 4. أوقات الانتظار (Wait times)
+        obs.append(self.waits)
+        
+        # ⚠️ التعديل المهم هنا: تحويل كل شيء إلى float32
+        return np.concatenate(obs).astype(np.float32)
 
     def _info(self):
         return dict(queues=self.queues.copy(), phase=self.phase,

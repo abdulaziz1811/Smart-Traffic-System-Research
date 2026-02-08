@@ -1,0 +1,6 @@
+[2026-02-08 16:35:53] INFO — Seed: 42
+[2026-02-08 16:35:53] INFO — Device: Apple MPS
+[2026-02-08 16:35:53] INFO — Creating Traffic Signal Environment...
+[2026-02-08 16:35:53] INFO — Environment is valid! ✅
+[2026-02-08 16:35:53] INFO — Starting RL Training... (This takes time)
+[2026-02-08 16:36:25] INFO — Training Finished! Model saved to models/rl_agents/final_ppo_agent

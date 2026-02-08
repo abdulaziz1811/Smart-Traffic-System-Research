@@ -1,0 +1,6 @@
+[2026-02-08 16:44:07] INFO — Seed: 42
+[2026-02-08 16:44:07] INFO — Device: Apple MPS
+[2026-02-08 16:44:07] INFO — Loading: models/weights/final_model
+[2026-02-08 16:44:08] INFO — Params: 41,502,409 total, 41,502,409 trainable
+[2026-02-08 16:44:09] WARNING — Video not found! Running in Simulation Mode only...
+[2026-02-08 16:44:09] INFO — Starting System...
