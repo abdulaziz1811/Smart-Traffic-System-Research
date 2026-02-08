@@ -1,0 +1,85 @@
+# ╔══════════════════════════════════════════════════════════╗
+# ║  Smart Traffic Signal Control System — Configuration    ║
+# ║  متوافق مع النموذج المدرب + البيانات الحالية           ║
+# ╚══════════════════════════════════════════════════════════╝
+
+# ── Paths (نفس المسارات القديمة بالضبط) ──────────────────
+paths:
+  images_dir: "data/raw/DETRAC-Images/DETRAC-Images"
+  xml_dir: "data/annotations/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML"
+  annotations_dir: "data/annotations"
+  weights_dir: "models/weights"
+  results_dir: "outputs/results"
+  log_dir: "outputs/logs"
+
+# ── Dataset ──────────────────────────────────────────────
+dataset:
+  name: "UA-DETRAC"
+  split_ratios: { train: 0.70, val: 0.15, test: 0.15 }
+  # ⚠️ 1-indexed — متوافق مع النموذج المدرب القديم
+  # النموذج الحالي محفوظ بـ id2label: {1:"Car", 2:"Bus", 3:"Van", 4:"Others"}
+  categories: { car: 1, bus: 2, van: 3, others: 4 }
+  num_classes: 4
+  id2label: { 1: "Car", 2: "Bus", 3: "Van", 4: "Others" }
+  default_image_size: [960, 540]
+
+# ── Augmentation ─────────────────────────────────────────
+augmentation:
+  horizontal_flip: true
+  flip_prob: 0.5
+  color_jitter:
+    enabled: true
+    brightness: 0.2
+    contrast: 0.2
+    saturation: 0.2
+    hue: 0.1
+
+# ── Model ────────────────────────────────────────────────
+model:
+  backbone: "facebook/detr-resnet-50"
+  image_size: { shortest_edge: 480, longest_edge: 640 }
+  image_mean: [0.485, 0.456, 0.406]
+  image_std:  [0.229, 0.224, 0.225]
+
+# ── Training ─────────────────────────────────────────────
+training:
+  seed: 42
+  epochs: 30
+  batch_size: 4
+  gradient_accumulation: 4
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  max_grad_norm: 0.1
+  scheduler: "cosine"
+  warmup_ratio: 0.05
+  early_stopping: { enabled: true, patience: 5, min_delta: 0.001 }
+  checkpointing: { keep_last_n: 3 }
+  dataloader: { num_workers: 4, pin_memory: true, drop_last: true }
+
+# ── Inference ────────────────────────────────────────────
+inference:
+  confidence_threshold: 0.5
+  nms_threshold: 0.5
+
+# ── Video ────────────────────────────────────────────────
+video:
+  fps: 25
+  codec: "mp4v"
+  show_overlay: true
+
+# ── Tracking (SORT) ─────────────────────────────────────
+tracking:
+  max_age: 30
+  min_hits: 3
+  iou_threshold: 0.3
+
+# ── RL ───────────────────────────────────────────────────
+rl:
+  num_approaches: 4
+  num_phases: 4
+  max_steps: 500
+  min_green: 10
+  max_green: 60
+  arrival_rates: [0.3, 0.5, 0.2, 0.4]
+  service_rate: 0.8
+  switch_penalty: -2.0
