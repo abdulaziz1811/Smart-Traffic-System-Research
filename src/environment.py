@@ -1,20 +1,21 @@
 """
-Traffic Signal RL Environment
-===============================
-Gymnasium-compatible environment for adaptive signal control
-using vehicle counts from the detection model.
-
-State:  queue_lengths + phase_one_hot + timer + waiting_times
-Action: 0=keep | 1=next_phase | 2=demand_switch
-Reward: −queues − switch_penalty + service_bonus
+Traffic Signal RL Environment (Enhanced V2)
+===========================================
+Improvements:
+1. Dynamic Arrival Rates: Random traffic density per episode (Robustness).
+2. Quadratic Reward: Penalizes long queues heavily (Fairness).
 """
+
 import logging
-from typing import Dict
+from typing import Dict, Optional
 import numpy as np
 
-# استيراد gymnasium مباشرة لأنه هو المعتمد الآن
-import gymnasium as gym
-from gymnasium import spaces
+try:
+    import gymnasium as gym
+    from gymnasium import spaces
+except ImportError:
+    import gym
+    from gym import spaces
 
 log = logging.getLogger("traffic")
 
@@ -30,126 +31,156 @@ class TrafficSignalEnv(gym.Env):
         self.max_steps = rc["max_steps"]
         self.min_green = rc["min_green"]
         self.max_green = rc["max_green"]
-        self.arrivals = np.array(rc["arrival_rates"], dtype=np.float32)
+        
+        # إعدادات الزحمة الديناميكية
+        self.arr_low = rc.get("arrival_rate_low", 0.02)
+        self.arr_high = rc.get("arrival_rate_high", 0.15)
         self.service = rc["service_rate"]
         self.switch_pen = rc.get("switch_penalty", -2.0)
 
-        # Which approaches get green per phase
+        # خريطة الإشارات (أي مسارات تأخذ الأخضر في كل مرحلة)
+        # Phase 0: NS Straight (North-South)
+        # Phase 1: NS Left
+        # Phase 2: EW Straight (East-West)
+        # Phase 3: EW Left
         self.green_map = {0: [0, 2], 1: [0, 2], 2: [1, 3], 3: [1, 3]}
 
+        # تعريف مساحة الملاحظات (State Space)
+        # [Queues(4) + Phase_OneHot(4) + Timer(1) + Waits(4)] = 13 inputs
         obs_dim = self.n_app + self.n_phase + 1 + self.n_app
+        self.observation_space = spaces.Box(
+            low=0, high=500, shape=(obs_dim,), dtype=np.float32
+        )
+        
+        # تعريف مساحة الأكشن (Actions): 0=Keep, 1=Next, 2=Switch Logic
         self.action_space = spaces.Discrete(3)
-        self.observation_space = spaces.Box(0, 200, (obs_dim,), np.float32)
-        self._reset_state()
 
-    def _reset_state(self):
-        self.queues = np.zeros(self.n_app, np.float32)
-        self.waits = np.zeros(self.n_app, np.float32)
-        self.phase = self.timer = self.step_n = 0
-        self.total_served = self.switches = 0
+        # الحالة الداخلية
+        self.queues = np.zeros(self.n_app, dtype=np.float32)
+        self.waits = np.zeros(self.n_app, dtype=np.float32)
+        self.phase = 0
+        self.timer = 0
+        self.step_n = 0
+        self.arrivals = np.zeros(self.n_app, dtype=np.float32)
+        self.switches = 0
+        self.total_served = 0
 
-    def _obs(self):
-        # 1. حالة الطوابير (Queues)
-        obs = [self.queues]
+    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+        super().reset(seed=seed)
         
-        # 2. حالة الإشارة (One-hot encoding for phase)
-        phase_oh = np.zeros(self.n_phase)
-        phase_oh[self.phase] = 1
-        obs.append(phase_oh)
+        # 🌟 التحسين الأول: زحمة عشوائية في كل بداية (Dynamic Traffic)
+        # هذا يجعل الايجنت جاهزاً لأي سيناريو (صباح، ليل، ذروة)
+        self.arrivals = self.np_random.uniform(
+            self.arr_low, self.arr_high, size=self.n_app
+        ).astype(np.float32)
         
-        # 3. المؤقت (Timer)
-        obs.append([self.timer])
+        # إعادة تصفير العدادات
+        self.queues.fill(0)
+        self.waits.fill(0)
+        self.phase = 0
+        self.timer = 0
+        self.step_n = 0
+        self.switches = 0
+        self.total_served = 0
         
-        # 4. أوقات الانتظار (Wait times)
-        obs.append(self.waits)
-        
-        # ⚠️ التعديل المهم هنا: تحويل كل شيء إلى float32
-        return np.concatenate(obs).astype(np.float32)
-
-    def _info(self):
-        return dict(queues=self.queues.copy(), phase=self.phase,
-                    timer=self.timer, served=self.total_served, switches=self.switches)
-
-    def reset(self, *, seed=None, options=None):
-        super().reset(seed=seed); self._reset_state()
-        self.queues = self.np_random.poisson(3, self.n_app).astype(np.float32)
-        return self._obs(), self._info()
+        return self._obs(), {}
 
     def step(self, action):
         self.step_n += 1
         old_phase = self.phase
         
-        # تنفيذ القرار (0: Keep, 1: Next, 2: Switch logic)
+        # تنفيذ القرار (Logic Control)
+        # Action 0: Keep (لا تفعل شيئاً)
+        # Action 1: Next Phase (انتقل للمرحلة التالية بالترتيب)
+        # Action 2: Smart Switch (انتقل للمسار الأكثر ازدحاماً فوراً)
+        
         if action == 1 and self.timer >= self.min_green:
             self.phase = (self.phase + 1) % self.n_phase
         elif action == 2 and self.timer >= self.min_green:
-            # ذكاء إضافي: الانتقال للمرحلة ذات الطلب الأعلى
-            demands = [sum(self.queues[a] for a in self.green_map[p]) for p in range(self.n_phase)]
+            # منطق ذكي: البحث عن المرحلة التي تخدم أكبر عدد من المنتظرين
+            demands = []
+            for p in range(self.n_phase):
+                # مجموع السيارات في المسارات التي ستفتح لها الإشارة p
+                lane_sum = sum(self.queues[a] for a in self.green_map[p])
+                demands.append(lane_sum)
             self.phase = int(np.argmax(demands))
             
-        # تحديث المؤقتات
+        # تحديث عداد الإشارة
         if self.phase != old_phase:
             self.timer = 0
             self.switches += 1
         else:
             self.timer += 1
             
-        # الانتقال الإجباري إذا تجاوزنا الحد الأقصى
+        # القفل الإجباري (Max Green Violation)
         if self.timer >= self.max_green:
             self.phase = (self.phase + 1) % self.n_phase
             self.timer = 0
             self.switches += 1
 
-        # محاكاة وصول ومغادرة السيارات
-        arrivals = self.np_random.poisson(self.arrivals)
-        self.queues += arrivals
+        # محاكاة البيئة (Simulation Step)
+        # 1. وصول سيارات جديدة
+        new_cars = self.np_random.poisson(self.arrivals)
+        self.queues += new_cars
         
-        # السيارات التي يتم خدمتها (التي تمر)
+        # 2. تصريف السيارات (Service)
         served = 0.0
-        active_approaches = self.green_map[self.phase]
-        for a in active_approaches:
-            s = min(self.queues[a], self.service)
-            self.queues[a] -= s
+        active_lanes = self.green_map[self.phase]
+        for lane in active_lanes:
+            # يمكن تمرير عدد معين فقط (service rate) أو الموجود في الطابور أيهما أقل
+            # نضيف عشوائية بسيطة لسرعة التصريف لمحاكاة الواقع
+            flow_rate = self.service * self.np_random.uniform(0.8, 1.2)
+            s = min(self.queues[lane], flow_rate)
+            self.queues[lane] -= s
             served += s
-            # السيارات التي مرت تصفر وقت انتظارها
-            # ملاحظة: لتبسيط المحاكاة نفترض أن المغادرين هم من كانوا ينتظرون
-             # هنا تقريب بسيط: نقلل مجموع أوقات الانتظار بنسبة المغادرين
-            if self.queues[a] > 0:
-                 self.waits[a] *= (1.0 - s/ (self.queues[a] + s))
+            
+            # تقليل وقت الانتظار للمسارات النشطة (تقريبياً)
+            if self.queues[lane] > 0:
+                 self.waits[lane] *= 0.9 # تخفيض تدريجي للانتظار
             else:
-                 self.waits[a] = 0
+                 self.waits[lane] = 0
 
         self.queues = np.maximum(self.queues, 0)
         
-        # تحديث أوقات الانتظار للباقين
-        # كل سيارة باقية تزيد وقت انتظارها دقيقة واحدة (أو خطوة واحدة)
+        # 3. تحديث أوقات الانتظار للباقين
+        # كل سيارة باقية تزيد "ضغط الانتظار"
         self.waits += self.queues 
-        
         self.total_served += served
 
-        # ── 🔥 دالة المكافأة الذكية الجديدة 🔥 ──
-        # 1. عقوبة على طول الطابور (Pressure)
-        queue_penalty = -np.sum(self.queues)
+        # ── 🔥 التحسين الثاني: دالة المكافأة التربيعية (Quadratic Reward) 🔥 ──
+        # العقاب بأس 2 يجعل النظام يكره الطوابير الطويلة جداً
+        # مثال: طابورين (10, 10) => العقوبة 100+100=200
+        # بينما (1, 19) => العقوبة 1+361=362 (عقوبة أكبر لنفس عدد السيارات!)
+        # هذا يجبر الايجنت على "موازنة" التقاطع
         
-        # 2. عقوبة على إجمالي وقت الانتظار (Wait Time)
-        # هذا يمنع الوكيل من تجاهل مسار قليل السيارات لفترة طويلة
-        wait_penalty = -np.sum(self.waits) * 0.1  # وزن 0.1 حتى لا يطغى على الطابور
+        queue_cost = -np.sum(self.queues ** 2) / 100.0  # نقسم لتقليص الرقم
+        wait_cost = -np.sum(self.waits) / 500.0         # عقوبة التأخير
+        switch_cost = self.switch_pen if self.phase != old_phase else 0.0
+        service_reward = served * 2.0                   # مكافأة لكل سيارة تمر
         
-        # 3. عقوبة تغيير الإشارة (للتقليل من التذبذب)
-        switch_pen = self.switch_pen if self.phase != old_phase else 0.0
-        
-        reward = queue_penalty + wait_penalty + switch_pen + served
+        reward = queue_cost + wait_cost + switch_cost + service_reward
 
         terminated = False
         truncated = self.step_n >= self.max_steps
         
         return self._obs(), float(reward), terminated, truncated, self._info()
-        """Override queues with real detection counts from the model."""
-        for a, c in counts.items():
-            if 0 <= a < self.n_app: self.queues[a] = float(c)
 
-    def render(self):
-        names = ["N-S Str", "N-S Left", "E-W Str", "E-W Left"]
-        print(f"\nStep {self.step_n} | Phase: {names[self.phase]} (t={self.timer})")
-        for i in range(self.n_app):
-            print(f"  App {i}: {'█' * int(self.queues[i])} ({self.queues[i]:.0f})")
+    def _obs(self):
+        # تجميع الحالة للموديل
+        phase_oh = np.zeros(self.n_phase)
+        phase_oh[self.phase] = 1
+        
+        obs = np.concatenate([
+            self.queues,        # حالة الطوابير
+            phase_oh,           # حالة الإشارة الحالية
+            [self.timer],       # كم ثانية مضت
+            self.waits          # أوقات الانتظار
+        ])
+        return obs.astype(np.float32)
+
+    def _info(self):
+        return {
+            "switches": self.switches,
+            "served": self.total_served,
+            "avg_queue": np.mean(self.queues)
+        }
