@@ -26,7 +26,7 @@ class TrafficSignalEnv(gym.Env):
     def __init__(self, cfg: dict):
         super().__init__()
         rc = cfg["rl"]
-        self.n_app = rc["num_approaches"]
+        self.n_app = rc["num_approaches"]  # سيقرأ 8 من ملف الكونفق
         self.n_phase = rc["num_phases"]
         self.max_steps = rc["max_steps"]
         self.min_green = rc["min_green"]
@@ -38,15 +38,22 @@ class TrafficSignalEnv(gym.Env):
         self.service = rc["service_rate"]
         self.switch_pen = rc.get("switch_penalty", -2.0)
 
-        # خريطة الإشارات (أي مسارات تأخذ الأخضر في كل مرحلة)
-        # Phase 0: NS Straight (North-South)
-        # Phase 1: NS Left
-        # Phase 2: EW Straight (East-West)
-        # Phase 3: EW Left
-        self.green_map = {0: [0, 2], 1: [0, 2], 2: [1, 3], 3: [1, 3]}
+        # خريطة الإشارات (توزيع المسارات على المراحل)
+        # Mapping Indices (8 Approaches):
+        # 0: North Straight | 1: North Left
+        # 2: South Straight | 3: South Left
+        # 4: East Straight  | 5: East Left
+        # 6: West Straight  | 7: West Left
+        
+        self.green_map = {
+            0: [0, 2],  # Phase 0: North Straight + South Straight
+            1: [1, 3],  # Phase 1: North Left + South Left (Protected Left Turn)
+            2: [4, 6],  # Phase 2: East Straight + West Straight
+            3: [5, 7]   # Phase 3: East Left + West Left (Protected Left Turn)
+        }
 
         # تعريف مساحة الملاحظات (State Space)
-        # [Queues(4) + Phase_OneHot(4) + Timer(1) + Waits(4)] = 13 inputs
+        # [Queues(8) + Phase_OneHot(4) + Timer(1) + Waits(8)] = 21 inputs
         obs_dim = self.n_app + self.n_phase + 1 + self.n_app
         self.observation_space = spaces.Box(
             low=0, high=500, shape=(obs_dim,), dtype=np.float32

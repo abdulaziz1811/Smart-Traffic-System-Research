@@ -73,21 +73,11 @@ tracking:
   min_hits: 3
   iou_threshold: 0.3
 
-# ── RL ───────────────────────────────────────────────────
-rl:
-  num_approaches: 4
-  num_phases: 4
-  max_steps: 500
-  min_green: 10
-  max_green: 60
-  arrival_rates: [0.3, 0.5, 0.2, 0.4]
-  service_rate: 0.8
-  switch_penalty: -2.0
 
 # ── Reinforcement Learning (RL) ──────────────────────────
 rl:
-  num_approaches: 4
-  num_phases: 4
+  num_approaches: 8  # تم التعديل إلى 8 لتمثيل (4 مستقيم + 4 يسار)
+  num_phases: 4      # تبقى 4 مراحل
   max_steps: 3600
   min_green: 10
   max_green: 60
@@ -95,7 +85,7 @@ rl:
   # التغيير هنا: بدلاً من قائمة ثابتة، نضع مجالاً للعشوائية
   # arrival_rates_range: [Min, Max] (سيارات في الثانية لكل مسار)
   arrival_rate_low: 0.02   # زحمة خفيفة جداً
-  arrival_rate_high: 0.15  # زحمة عالية (ساعة ذروة)
+  arrival_rate_high: 0.18  # زحمة عالية (ساعة ذروة)
   
   service_rate: 0.5
   switch_penalty: -2.0
