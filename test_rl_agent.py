@@ -12,55 +12,82 @@ def main():
     # 2. تحميل بيئة المحاكاة
     env = TrafficSignalEnv(cfg)
     
-    # 3. تحميل موديل الذكاء اللي دربته تو
+    # 3. تحميل موديل الذكاء
     model_path = "models/rl_agents/final_ppo_agent"
     if not os.path.exists(model_path + ".zip"):
         log.error(f"Model not found at {model_path}! Did you run training?")
         return
 
-    log.info(f"Loading trained agent from: {model_path}")
+    log.info(f"Loading Logic-Agent from: {model_path}")
     model = PPO.load(model_path)
 
     # 4. تشغيل المحاكاة
     obs, _ = env.reset()
+    
+    # متغيرات التحكم في الحلقة
     done = False
+    truncated = False  # مهم جداً: متغير تتبع انتهاء الوقت
+    
     total_reward = 0
     step = 0
 
-    print("\n" + "="*50)
-    print("🚦 STARTING SMART TRAFFIC CONTROL SIMULATION 🚦")
-    print("="*50 + "\n")
+    # أسماء المراحل لتوضيح العرض
+    phase_names = [
+        "Phase 0: N/S Straight", 
+        "Phase 1: N/S Left", 
+        "Phase 2: E/W Straight", 
+        "Phase 3: E/W Left"
+    ]
+
+    print("\n" + "="*60)
+    print("🚦 STARTING SMART TRAFFIC LOGIC TEST 🚦")
+    print("="*60 + "\n")
 
     try:
-        while not done:
-            # الذكاء يقرر: هل يغير الإشارة (Action)؟
+        # التعديل هنا: التوقف إذا انتهت اللعبة أو انتهى الوقت
+        while not (done or truncated):
+            # الذكاء يقرر
             action, _ = model.predict(obs, deterministic=True)
             
-            # تنفيذ القرار في البيئة
+            # تنفيذ القرار
+            # لاحظ استقبال المتغير truncated
             obs, reward, done, truncated, info = env.step(action)
+            
             total_reward += reward
             step += 1
 
-            # --- عرض حي لما يحدث (Visualization) ---
-            # مسح الشاشة لتحديث الأرقام
-            # os.system('cls' if os.name == 'nt' else 'clear') 
+            # --- استخراج البيانات ---
+            queues = obs[:8]
+            current_phase_idx = np.argmax(obs[8:12])
+            timer = obs[12]
+            next_density = obs[13]
+
+            # --- عرض لوحة القيادة ---
+            # مسح الشاشة (اختياري)
+            os.system('cls' if os.name == 'nt' else 'clear')
             
-            # قراءة الطوابير من الحالة (أول 4 أرقام هي طوابير المسارات)
-            # ملاحظة: هذا يعتمد على ترتيب obs في environment.py
-            queues = obs[:4]  
-            phase = np.argmax(obs[4:8]) # الإشارة الخضراء الحالية
+            print(f"⏱️  Step: {step} / {cfg['rl']['max_steps']} | Timer: {timer:.2f}")
+            print(f"🚦 Current: {phase_names[current_phase_idx]}")
+            print("-" * 40)
+            print(f"   North: [Str: {int(queues[0]):02d} | Left: {int(queues[1]):02d}]")
+            print(f"   South: [Str: {int(queues[2]):02d} | Left: {int(queues[3]):02d}]")
+            print(f"   East : [Str: {int(queues[4]):02d} | Left: {int(queues[5]):02d}]")
+            print(f"   West : [Str: {int(queues[6]):02d} | Left: {int(queues[7]):02d}]")
+            print("-" * 40)
             
-            print(f"Step: {step} | Phase: {['NS Green', 'NS Left', 'EW Green', 'EW Left'][phase]}")
-            print(f"🚗 Queues: N={int(queues[0])} | S={int(queues[1])} | E={int(queues[2])} | W={int(queues[3])}")
-            print(f"🤖 Action: {['Keep', 'Next', 'Switch'][int(action)]} | Reward: {reward:.1f}")
-            print("-" * 30)
-            
-            time.sleep(0.1)  # تأخير بسيط عشان تلحق تقرأ الأرقام
+            action_str = "🟢 EXTEND Green" if action == 0 else "🔴 CYCLE Phase"
+            print(f"🧠 Logic: {action_str}")
+            print(f"👀 Next Phase Density: {next_density:.2f}")
+            print(f"💰 Step Reward: {reward:.2f}")
+            print("=" * 60)
+
+            time.sleep(0.1) # تسريع العرض قليلاً
+
+        print("\n🏁 Test Finished: Max steps reached or Episode ended.")
+        print(f"📊 Total Reward: {total_reward:.2f}")
 
     except KeyboardInterrupt:
-        print("\n🛑 Simulation stopped by user.")
-
-    print(f"\n✅ Simulation Finished. Total Reward: {total_reward:.2f}")
+        print("\n🛑 Simulation Stopped.")
 
 if __name__ == "__main__":
     main()
