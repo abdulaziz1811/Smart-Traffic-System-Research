@@ -1,9 +1,8 @@
 # ╔══════════════════════════════════════════════════════════╗
 # ║  Smart Traffic Signal Control System — Configuration    ║
-# ║  متوافق مع النموذج المدرب + البيانات الحالية           ║
 # ╚══════════════════════════════════════════════════════════╝
 
-# ── Paths (نفس المسارات القديمة بالضبط) ──────────────────
+# ── Paths ────────────────────────────────────────────────
 paths:
   images_dir: "data/raw/DETRAC-Images/DETRAC-Images"
   xml_dir: "data/annotations/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML"
@@ -16,8 +15,7 @@ paths:
 dataset:
   name: "UA-DETRAC"
   split_ratios: { train: 0.70, val: 0.15, test: 0.15 }
-  # ⚠️ 1-indexed — متوافق مع النموذج المدرب القديم
-  # النموذج الحالي محفوظ بـ id2label: {1:"Car", 2:"Bus", 3:"Van", 4:"Others"}
+  # Class mapping (Compatible with trained DETR model)
   categories: { car: 1, bus: 2, van: 3, others: 4 }
   num_classes: 4
   id2label: { 1: "Car", 2: "Bus", 3: "Van", 4: "Others" }
@@ -25,18 +23,14 @@ dataset:
 
 # ── Augmentation ─────────────────────────────────────────
 augmentation:
-  horizontal_flip: true
-  flip_prob: 0.5
-  color_jitter:
-    enabled: true
-    brightness: 0.2
-    contrast: 0.2
-    saturation: 0.2
-    hue: 0.1
+  horizontal_flip: 0.5
+  brightness_contrast: 0.2
+  crop_size: [480, 640] 
 
-# ── Model ────────────────────────────────────────────────
+# ── Model (DETR) ─────────────────────────────────────────
 model:
-  backbone: "facebook/detr-resnet-50"
+  backbone: "resnet50"
+  pretrained_model: "facebook/detr-resnet-50"
   image_size: { shortest_edge: 480, longest_edge: 640 }
   image_mean: [0.485, 0.456, 0.406]
   image_std:  [0.229, 0.224, 0.225]
@@ -44,8 +38,8 @@ model:
 # ── Training ─────────────────────────────────────────────
 training:
   seed: 42
-  epochs: 15
-  batch_size: 8
+  epochs: 15                 # Adjust based on local hardware capabilities
+  batch_size: 8              # Lower this if running out of GPU memory
   gradient_accumulation: 4
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
@@ -54,41 +48,20 @@ training:
   warmup_ratio: 0.05
   early_stopping: { enabled: true, patience: 5, min_delta: 0.001 }
   checkpointing: { keep_last_n: 3 }
-  dataloader: { num_workers: 4, pin_memory: true, drop_last: true }
+  dataloader: { num_workers: 2, pin_memory: true, drop_last: true }
 
 # ── Inference ────────────────────────────────────────────
 inference:
   confidence_threshold: 0.5
   nms_threshold: 0.5
 
-# ── Video ────────────────────────────────────────────────
-video:
-  fps: 25
-  codec: "mp4v"
-  show_overlay: true
-
-# ── Tracking (SORT) ─────────────────────────────────────
-tracking:
-  max_age: 30
-  min_hits: 3
-  iou_threshold: 0.3
-
-
 # ── Reinforcement Learning (RL) ──────────────────────────
 rl:
-  num_approaches: 8      
-  num_phases: 4          
-  
-  # إعدادات الوقت (إدارة الدورة)
-  max_steps: 1000        # طول الحلقة
-  min_green: 10          # أقل وقت (مهم جداً للواقعية)
-  max_green: 60          # أقصى وقت قبل الإجبار على التبديل
-  
-  # إعدادات المرور الديناميكية
-  service_rate: 0.5      
-  arrival_rate_low: 0.02 # تدفق خفيف
-  arrival_rate_high: 0.15 # تدفق عالي (ليتعلم التعامل مع الزحمة)
-  
-  # إعدادات المكافآت (تعديل هام)
-  # جعلناها -5 بدلاً من -10 لأن التبديل الآن إجباري لاستمرار الدورة
-  switch_penalty: -5.0
+  num_approaches: 4
+  num_phases: 4
+  env_config:
+    render_mode: "rgb_array" # Use 'human' to see the simulation window locally
+    max_steps: 1000
+    green_duration: 30
+    yellow_duration: 4
+    red_duration: 2
