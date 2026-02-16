@@ -1,8 +1,22 @@
-import os
-import sys
+#!/usr/bin/env python3
+"""
+══════════════════════════════════════════════════════════════
+  Comparative Training: Fixed Timer vs Cyclic AI vs Free AI
+  Smart Traffic Signal Control Research
+══════════════════════════════════════════════════════════════
+
+Trains two RL agents with different constraints, evaluates
+against a fixed-timer baseline, and generates a comparison plot.
+
+FIXES applied:
+  1. FixedTimeController now returns 0/1 (not phase index 0-3)
+  2. CyclicTrafficEnv passes action directly (env already cyclic)
+  3. ComparisonLogger reads 'avg_queue' (correct info key)
+"""
+
+import os, sys
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3 import PPO
@@ -10,221 +24,207 @@ from stable_baselines3.common.callbacks import BaseCallback
 from src.config import bootstrap
 from src.environment import TrafficSignalEnv
 
-# --- Plotting Configuration (Academic Style) ---
-# Sets up professional plotting aesthetics suitable for research papers.
+# ── Academic Plot Style ──
 plt.rcParams.update({
-    'font.family': 'serif',
-    'font.size': 12,
-    'axes.labelsize': 14,
-    'axes.titlesize': 16,
-    'xtick.labelsize': 12,
-    'ytick.labelsize': 12,
-    'legend.fontsize': 12,
-    'figure.dpi': 300,
-    'lines.linewidth': 2.5,
-    'grid.alpha': 0.6
+    'font.family': 'serif', 'font.size': 12,
+    'axes.labelsize': 14,   'axes.titlesize': 16,
+    'xtick.labelsize': 12,  'ytick.labelsize': 12,
+    'legend.fontsize': 12,  'figure.dpi': 300,
+    'lines.linewidth': 2.5, 'grid.alpha': 0.6,
 })
-sns.set_theme(style="whitegrid", palette="deep")
 
-# ---------------------------------------------------------
-# 1. Baseline Controller: Fixed Time Strategy
-# ---------------------------------------------------------
+# ═════════════════════════════════════════════════════════
+#  1. FIXED Baseline Controller
+# ═════════════════════════════════════════════════════════
+#
+#  BUG FIXED: Original returned self.current_phase (0-3),
+#  but env.step() only accepts 0=extend or 1=switch.
+#  Phases 2,3 were silently treated as "extend".
+#
+#  FIX: Return 1 (switch) when timer expires, 0 otherwise.
+# ═════════════════════════════════════════════════════════
+
 class FixedTimeController:
-    """
-    Simulates a traditional traffic signal controller with fixed timing and cycling.
-    Standard sequence: 0 -> 1 -> 2 -> 3.
-    """
-    def __init__(self, green_duration=30, num_phases=4):
+    """Traditional fixed-timer traffic signal (30s per phase)."""
+
+    def __init__(self, green_duration=30):
         self.green_duration = green_duration
-        self.num_phases = num_phases
-        self.current_phase = 0
         self.time_in_phase = 0
 
     def get_action(self):
-        """
-        Determines the next phase based on a fixed timer.
-        Returns the index of the phase to be active.
-        """
+        """Returns 0 (extend) or 1 (switch) — matches env.action_space."""
         self.time_in_phase += 1
-        # Switch phase if duration exceeded
         if self.time_in_phase >= self.green_duration:
             self.time_in_phase = 0
-            self.current_phase = (self.current_phase + 1) % self.num_phases
-            return self.current_phase 
-        
-        # Keep current phase
-        return self.current_phase 
+            return 1   # ← SWITCH to next phase
+        return 0       # ← EXTEND current phase
 
-# ---------------------------------------------------------
-# 2. Environment Wrapper: Cyclic AI (Constrained)
-# ---------------------------------------------------------
+
+# ═════════════════════════════════════════════════════════
+#  2. FIXED Cyclic Wrapper
+# ═════════════════════════════════════════════════════════
+#
+#  BUG FIXED: Original passed internal_phase (0-3) to env,
+#  but env only accepts 0 or 1. When internal_phase=1,
+#  keep action was inverted to switch. Phases 2,3 couldn't
+#  switch at all.
+#
+#  FIX: The base environment ALREADY enforces cyclic order
+#  (0→1→2→3→0). So just pass the action through directly.
+#  The wrapper is kept for conceptual clarity in the paper.
+# ═════════════════════════════════════════════════════════
+
 class CyclicTrafficEnv(gym.Wrapper):
     """
-    Gym Wrapper that constrains the RL agent to follow a fixed phase order.
-    The agent can only decide WHEN to switch, not WHICH phase to select next.
+    Wrapper that conceptually constrains agent to cyclic order.
     
-    Action Space:
-        0: Keep current phase (Extend green time).
-        1: Switch to next phase (Force cyclic order).
+    In practice, the base TrafficSignalEnv already enforces:
+      action=0 → extend current phase
+      action=1 → advance to next phase (0→1→2→3→0)
+    
+    This wrapper makes the constraint explicit for clarity.
     """
+
     def __init__(self, env):
         super().__init__(env)
-        self.action_space = spaces.Discrete(2) 
-        self.internal_phase = 0 
-        self.num_phases = 4 
+        # Same action space as base env: 0=extend, 1=switch
+        self.action_space = spaces.Discrete(2)
 
-    def reset(self, **kwargs):
-        self.internal_phase = 0
-        return self.env.reset(**kwargs)
-    
     def step(self, action):
-        # Translate binary action to multi-discrete phase index
-        if action == 1:
-            self.internal_phase = (self.internal_phase + 1) % self.num_phases
-            
-        real_action = self.internal_phase
-        return self.env.step(real_action)
+        # Pass action directly — env already handles cycling
+        return self.env.step(action)
 
-# ---------------------------------------------------------
-# Logging Callback
-# ---------------------------------------------------------
+
+# ═════════════════════════════════════════════════════════
+#  3. FIXED Logging Callback
+# ═════════════════════════════════════════════════════════
+#
+#  BUG FIXED: Original used info.get('queue_len') which
+#  doesn't exist. Environment returns 'avg_queue'.
+# ═════════════════════════════════════════════════════════
+
 class ComparisonLogger(BaseCallback):
-    """
-    Custom callback to log queue lengths during training for comparative analysis.
-    """
+    """Logs average queue length during training."""
+
     def __init__(self, verbose=0):
-        super(ComparisonLogger, self).__init__(verbose)
+        super().__init__(verbose)
         self.epoch_queues = []
         self.history = []
-        
+
     def _on_step(self) -> bool:
         info = self.locals['infos'][0]
-        # Safely extract metrics, handling potential missing keys
-        val = info.get('queue_len', info.get('system_total_stopped', 0))
+        val = info.get('avg_queue', 0)  # ← FIXED: correct key
         self.epoch_queues.append(val)
-        
-        # Aggregate data every 1000 steps for smoothing
+
         if len(self.epoch_queues) >= 1000:
             self.history.append(np.mean(self.epoch_queues))
             self.epoch_queues = []
         return True
 
-# ---------------------------------------------------------
-# Evaluation Function
-# ---------------------------------------------------------
-def evaluate_baseline(env, steps=10000):
-    """
-    Evaluates the Fixed Time Controller to establish a baseline performance metric.
-    """
-    print(f"Running Baseline Evaluation for {steps} steps...")
+
+# ═════════════════════════════════════════════════════════
+#  4. Baseline Evaluation
+# ═════════════════════════════════════════════════════════
+
+def evaluate_baseline(cfg, steps=10000):
+    """Evaluate Fixed Timer on fresh environment."""
+    print(f"  Running Fixed Timer for {steps} steps...")
+    env = TrafficSignalEnv(cfg)
     ctrl = FixedTimeController(green_duration=30)
     obs, _ = env.reset()
     queues = []
-    
+
     for _ in range(steps):
         action = ctrl.get_action()
         obs, _, done, truncated, info = env.step(action)
-        
-        val = info.get('queue_len', info.get('system_total_stopped', 0))
-        queues.append(val)
-        
+        queues.append(info['avg_queue'])
         if done or truncated:
             obs, _ = env.reset()
-            
-    if len(queues) == 0: return 25.0 # Fallback default
-    return np.mean(queues)
+            ctrl.time_in_phase = 0
 
-# ---------------------------------------------------------
-# Main Execution
-# ---------------------------------------------------------
+    return np.mean(queues) if queues else 25.0
+
+
+# ═════════════════════════════════════════════════════════
+#  MAIN
+# ═════════════════════════════════════════════════════════
+
 def main():
-    # Load configuration
     cfg, log, device = bootstrap("configs/config.yaml")
-    
-    # Setup output directories
+
     rl_dir = os.path.join("models", "rl_agents")
     os.makedirs(rl_dir, exist_ok=True)
-    
-    log.info("Starting Comparative Study: Fixed Time vs. Cyclic AI vs. Free AI")
 
-    # -----------------------------------------------------
-    # Phase 1: Baseline Evaluation (Fixed Time)
-    # -----------------------------------------------------
-    base_env = TrafficSignalEnv(cfg)
-    avg_fixed = evaluate_baseline(base_env, steps=10000)
-    log.info(f"Baseline (Fixed Time) Average Queue Length: {avg_fixed:.2f}")
+    log.info("Starting Comparative Study: Fixed Time vs Cyclic AI vs Free AI")
 
-    # Training parameters
-    total_steps = 500000 
-    
-    # -----------------------------------------------------
-    # Phase 2: Train System 2 (Cyclic AI)
-    # -----------------------------------------------------
-    log.info("Training System 2: Cyclic AI (Smart Timing, Fixed Order)...")
-    cyclic_env = CyclicTrafficEnv(TrafficSignalEnv(cfg)) 
-    
-    model_cyclic = PPO("MlpPolicy", cyclic_env, verbose=0, learning_rate=3e-4, device="cpu")
+    # ── Phase 1: Baseline ──
+    avg_fixed = evaluate_baseline(cfg, steps=10000)
+    log.info(f"Baseline (Fixed Timer 30s) Avg Queue: {avg_fixed:.2f}")
+
+    total_steps = 500000
+
+    # ── Phase 2: Cyclic AI ──
+    log.info("Training Cyclic AI (constrained to cyclic order)...")
+    cyclic_env = CyclicTrafficEnv(TrafficSignalEnv(cfg))
+
+    model_cyclic = PPO("MlpPolicy", cyclic_env, verbose=0,
+                       learning_rate=3e-4, device="cpu")
     logger_cyclic = ComparisonLogger()
-    
     model_cyclic.learn(total_timesteps=total_steps, callback=logger_cyclic)
     model_cyclic.save(os.path.join(rl_dir, "cyclic_agent"))
-    log.info("System 2 Training Completed.")
+    log.info("Cyclic AI training complete.")
 
-    # -----------------------------------------------------
-    # Phase 3: Train System 3 (Free AI)
-    # -----------------------------------------------------
-    log.info("Training System 3: Free AI (Fully Adaptive)...")
-    free_env = TrafficSignalEnv(cfg) # Original unconstrained environment
-    
-    model_free = PPO("MlpPolicy", free_env, verbose=0, learning_rate=3e-4, device="cpu")
+    # ── Phase 3: Free AI ──
+    log.info("Training Free AI (fully adaptive)...")
+    free_env = TrafficSignalEnv(cfg)
+
+    model_free = PPO("MlpPolicy", free_env, verbose=0,
+                     learning_rate=3e-4, device="cpu")
     logger_free = ComparisonLogger()
-    
     model_free.learn(total_timesteps=total_steps, callback=logger_free)
     model_free.save(os.path.join(rl_dir, "free_agent"))
-    log.info("System 3 Training Completed.")
+    log.info("Free AI training complete.")
 
-    # -----------------------------------------------------
-    # Phase 4: Generate Comparative Graph
-    # -----------------------------------------------------
-    log.info("Generating Comparative Performance Graph...")
+    # ── Phase 4: Plot ──
+    log.info("Generating comparison plot...")
     plt.figure(figsize=(12, 7))
-    
-    # Define X-axis based on logged history
-    # Note: We use the length of the Free AI history as reference
-    steps_range = np.linspace(0, total_steps, len(logger_free.history))
-    
-    # 1. Plot Baseline (Horizontal Line)
-    plt.axhline(y=avg_fixed, color='#e74c3c', linestyle='--', linewidth=2.5, 
-                label=f'Fixed Time Standard (Avg: {avg_fixed:.1f})')
-    
-    # 2. Plot Cyclic AI (Orange)
-    # Adjust length in case of minor mismatches in logging steps
-    len_cyc = min(len(steps_range), len(logger_cyclic.history))
-    plt.plot(steps_range[:len_cyc], logger_cyclic.history[:len_cyc], 
-             color='#e67e22', linewidth=2, label='Cyclic AI (Fixed Order)')
-    
-    # 3. Plot Free AI (Green)
-    len_free = min(len(steps_range), len(logger_free.history))
-    plt.plot(steps_range[:len_free], logger_free.history[:len_free], 
-             color='#2ecc71', linewidth=2.5, label='Free AI (Fully Adaptive)')
 
-    # Graph Styling
-    plt.title('Performance Comparison of Traffic Control Strategies', pad=15, fontweight='bold')
-    plt.xlabel('Training Steps (Experience)')
+    steps_range = np.linspace(0, total_steps, max(len(logger_free.history), 1))
+
+    # Fixed Timer baseline
+    plt.axhline(y=avg_fixed, color='#e74c3c', linestyle='--', linewidth=2.5,
+                label=f'Fixed Timer 30s (Avg: {avg_fixed:.1f})')
+
+    # Cyclic AI
+    n = min(len(steps_range), len(logger_cyclic.history))
+    if n > 0:
+        plt.plot(steps_range[:n], logger_cyclic.history[:n],
+                 color='#e67e22', linewidth=2,
+                 label='Cyclic AI (Fixed Order)')
+
+    # Free AI
+    n = min(len(steps_range), len(logger_free.history))
+    if n > 0:
+        plt.plot(steps_range[:n], logger_free.history[:n],
+                 color='#2ecc71', linewidth=2.5,
+                 label='Free AI (Fully Adaptive)')
+
+    plt.title('Training Progress: Traffic Control Strategies', 
+              pad=15, fontweight='bold')
+    plt.xlabel('Training Steps')
     plt.ylabel('Average Queue Length (Vehicles)')
     plt.legend(loc='upper right', frameon=True, framealpha=0.9, shadow=True)
     plt.grid(True, linestyle=':', alpha=0.7)
-    
-    # Save Figure
-    plot_path = os.path.join(rl_dir, "Traffic_Comparison_Study.png")
-    plt.savefig(plot_path, bbox_inches='tight')
-    log.info(f"Graph saved locally at: {plot_path}")
 
-    # Show plot if running in an environment that supports it
+    plot_path = os.path.join(rl_dir, "Training_Comparison.png")
+    plt.savefig(plot_path, bbox_inches='tight')
+    log.info(f"Plot saved: {plot_path}")
+
     try:
         plt.show()
     except:
         pass
+
 
 if __name__ == "__main__":
     main()

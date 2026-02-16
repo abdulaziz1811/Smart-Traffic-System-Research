@@ -15,7 +15,6 @@ paths:
 dataset:
   name: "UA-DETRAC"
   split_ratios: { train: 0.70, val: 0.15, test: 0.15 }
-  # Class mapping (Compatible with trained DETR model)
   categories: { car: 1, bus: 2, van: 3, others: 4 }
   num_classes: 4
   id2label: { 1: "Car", 2: "Bus", 3: "Van", 4: "Others" }
@@ -25,7 +24,7 @@ dataset:
 augmentation:
   horizontal_flip: 0.5
   brightness_contrast: 0.2
-  crop_size: [480, 640] 
+  crop_size: [480, 640]
 
 # ── Model (DETR) ─────────────────────────────────────────
 model:
@@ -38,8 +37,8 @@ model:
 # ── Training ─────────────────────────────────────────────
 training:
   seed: 42
-  epochs: 15                 # Adjust based on local hardware capabilities
-  batch_size: 8              # Lower this if running out of GPU memory
+  epochs: 15
+  batch_size: 8
   gradient_accumulation: 4
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
@@ -48,20 +47,34 @@ training:
   warmup_ratio: 0.05
   early_stopping: { enabled: true, patience: 5, min_delta: 0.001 }
   checkpointing: { keep_last_n: 3 }
-  dataloader: { num_workers: 2, pin_memory: true, drop_last: true }
+  dataloader: { num_workers: 4, pin_memory: true, drop_last: true }
 
 # ── Inference ────────────────────────────────────────────
 inference:
   confidence_threshold: 0.5
   nms_threshold: 0.5
 
+# ── Video ────────────────────────────────────────────────
+video:
+  fps: 25
+  codec: "mp4v"
+  show_overlay: true
+
+# ── Tracking (SORT) ─────────────────────────────────────
+tracking:
+  max_age: 30
+  min_hits: 3
+  iou_threshold: 0.3
+
 # ── Reinforcement Learning (RL) ──────────────────────────
+# Keys read directly by environment.py (TrafficSignalEnv)
 rl:
-  num_approaches: 4
-  num_phases: 4
-  env_config:
-    render_mode: "rgb_array" # Use 'human' to see the simulation window locally
-    max_steps: 1000
-    green_duration: 30
-    yellow_duration: 4
-    red_duration: 2
+  num_approaches: 8         # 8 lanes: N/S straight + left, E/W straight + left
+  num_phases: 4             # 4-phase cycle: NS-str, NS-left, EW-str, EW-left
+  max_steps: 3600           # Episode length (seconds of simulation)
+  min_green: 5              # Minimum green time before allowing switch
+  max_green: 60             # Maximum green time before forced switch
+  service_rate: 0.6         # Vehicles cleared per step per green lane
+  arrival_rate_low: 0.02    # Min Poisson arrival rate (randomized per episode)
+  arrival_rate_high: 0.15   # Max Poisson arrival rate
+  switch_penalty: -5.0      # Penalty for unnecessary phase switches
