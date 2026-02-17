@@ -1,122 +1,184 @@
 """
 Detection Model Wrapper (DETR)
 ==============================
-Two APIs:
-  1. DETRDetector class  → for track_video.py / real-time (accepts BGR frames)
-  2. build_detector()    → for train.py (returns raw HF model)
-     load_best_or_final()→ for predict.py / inference.py (returns raw HF model)
+Handles model loading and building for both training and inference.
 """
 
 import os
-import logging
 import torch
 import cv2
+import logging
 import numpy as np
 from PIL import Image
 from transformers import DetrImageProcessor, DetrForObjectDetection
 
+# Initialize logger
 log = logging.getLogger("traffic")
 
-
 # ══════════════════════════════════════════════════════════
-#  CLASS API — for track_video.py, demo real-time pipeline
+#  CLASS API — for Real-Time Inference (Video / Demo)
 # ══════════════════════════════════════════════════════════
 
 class DETRDetector:
-    """Self-contained detector: loads model+processor, accepts BGR frames."""
+    """
+    Self-contained detector class for inference.
+    Loads model + processor and accepts BGR frames (OpenCV format).
+    """
 
     def __init__(self, cfg):
         self.cfg = cfg
-        self.device = torch.device(
-            "cuda" if torch.cuda.is_available()
-            else "mps" if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-            else "cpu"
-        )
-        log.info(f"Detector device: {self.device}")
+        # Auto-detect device (CUDA -> MPS -> CPU)
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+        else:
+            self.device = torch.device("cpu")
+            
+        log.info(f"Detector initialized on device: {self.device}")
 
+        # Find best available model weights
         self.model_path = self._find_best_model_path()
+        log.info(f"Loading model weights from: {self.model_path}")
 
         try:
-            log.info(f"Loading model from: {self.model_path}")
-            self.processor = DetrImageProcessor.from_pretrained(self.model_path)
-            self.model = DetrForObjectDetection.from_pretrained(self.model_path)
+            # Load processor and model
+            self.processor = DetrImageProcessor.from_pretrained(
+                self.model_path,
+                revision="no_timm" 
+            )
+            self.model = DetrForObjectDetection.from_pretrained(
+                self.model_path,
+                revision="no_timm"
+            ).to(self.device)
+            self.model.eval()
+            
         except Exception as e:
-            log.warning(f"Failed to load from {self.model_path}: {e}")
-            log.warning("Falling back to pretrained backbone.")
-            bb = cfg["model"]["backbone"]
-            self.processor = DetrImageProcessor.from_pretrained(bb)
-            self.model = DetrForObjectDetection.from_pretrained(bb)
-
-        self.model.to(self.device)
-        self.model.eval()
-        self.conf_threshold = cfg["inference"]["confidence_threshold"]
+            log.error(f"Failed to load model from {self.model_path}: {e}")
+            log.warning("Falling back to default 'facebook/detr-resnet-50'...")
+            self.processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50", revision="no_timm")
+            self.model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50", revision="no_timm").to(self.device)
 
     def _find_best_model_path(self):
-        wd = self.cfg["paths"]["weights_dir"]
-        for name in ("best_model", "final_model", "detr_finetuned"):
-            p = os.path.join(wd, name)
-            if os.path.isdir(p) and os.listdir(p):
-                return p
-        return self.cfg["model"]["backbone"]
+        """Helper to find the most relevant model checkpoint."""
+        weights_dir = self.cfg["paths"]["weights_dir"]
+        candidates = [
+            os.path.join(weights_dir, "best_model"),      # Top priority: Best training result
+            os.path.join(weights_dir, "final_model"),     # Second: Final training result
+            "facebook/detr-resnet-50"                     # Fallback: Pretrained base model
+        ]
+        for path in candidates:
+            if os.path.exists(path) or path.startswith("facebook/"):
+                return path
+        return "facebook/detr-resnet-50"
 
-    def detect(self, image):
+    def detect(self, frame_bgr, conf_thresh=0.5):
         """
-        Detect on a BGR frame (OpenCV format).
-        Returns np.ndarray (N, 6): [x1, y1, x2, y2, score, class_id]
+        Run detection on a single BGR frame.
+        Returns: detections list [[x1, y1, x2, y2, score, class_id], ...]
         """
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(image_rgb)
+        # Convert BGR (OpenCV) to RGB (PIL)
+        image = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
 
-        inputs = self.processor(images=pil_img, return_tensors="pt").to(self.device)
+        # Preprocess
+        inputs = self.processor(images=image, return_tensors="pt").to(self.device)
+
+        # Inference
         with torch.no_grad():
             outputs = self.model(**inputs)
 
-        target_sizes = torch.tensor([pil_img.size[::-1]]).to(self.device)
+        # Post-process (convert logits to boxes)
+        target_sizes = torch.tensor([image.size[::-1]]).to(self.device)
         results = self.processor.post_process_object_detection(
-            outputs, target_sizes=target_sizes, threshold=self.conf_threshold
+            outputs, target_sizes=target_sizes, threshold=conf_thresh
         )[0]
 
         detections = []
         for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
-            x1, y1, x2, y2 = [round(i, 2) for i in box.tolist()]
-            detections.append([x1, y1, x2, y2, score.item(), label.item()])
+            box = [round(i, 2) for i in box.tolist()]
+            # Append [x1, y1, x2, y2, score, class_id]
+            detections.append([*box, score.item(), label.item()])
 
         return np.array(detections) if detections else np.empty((0, 6))
 
 
 # ══════════════════════════════════════════════════════════
-#  FUNCTIONAL API — for train.py, predict.py, inference.py
+#  FUNCTIONAL API — for Training Pipeline (train.py)
 # ══════════════════════════════════════════════════════════
 
 def build_detector(cfg, device, checkpoint=None):
-    """Build raw HF model for training pipeline."""
-    from src.config import get_categories
-    _, id2label, label2id, nc = get_categories(cfg)
+    """
+    Builds the DETR model for training.
+    Correctly handles HuggingFace model paths and custom checkpoints.
+    """
+    # 1. Get correct model path (fix for OSError)
+    # We prioritize 'pretrained_model' key, default to 'facebook/detr-resnet-50'
+    model_name = cfg["model"].get("pretrained_model", "facebook/detr-resnet-50")
+    
+    # 2. Extract Dataset Info
+    id2label = {int(k): v for k, v in cfg["dataset"]["id2label"].items()}
+    label2id = {v: k for k, v in id2label.items()}
+    num_classes = len(id2label)
 
-    if checkpoint:
-        log.info(f"Loading checkpoint: {checkpoint}")
-        model = DetrForObjectDetection.from_pretrained(checkpoint)
-    else:
-        bb = cfg["model"]["backbone"]
-        log.info(f"Init from backbone: {bb}")
-        model = DetrForObjectDetection.from_pretrained(
-            bb, num_labels=nc, id2label=id2label, label2id=label2id,
-            ignore_mismatched_sizes=True,
-        )
+    log.info(f"Building detector from base: {model_name}")
+
+    # 3. Load Model with correct config
+    # ignore_mismatched_sizes=True is crucial when fine-tuning on new classes
+    model = DetrForObjectDetection.from_pretrained(
+        model_name,
+        num_labels=num_classes,
+        id2label=id2label,
+        label2id=label2id,
+        ignore_mismatched_sizes=True,
+        revision="no_timm" 
+    )
+
+    # 4. Load Checkpoint (Resume Training) if provided
+    if checkpoint and os.path.exists(checkpoint):
+        log.info(f"Resuming training from checkpoint: {checkpoint}")
+        cpt = torch.load(checkpoint, map_location=device)
+        
+        # Handle different checkpoint formats (full dict vs state_dict only)
+        state_dict = cpt['model_state_dict'] if 'model_state_dict' in cpt else cpt
+        
+        try:
+            model.load_state_dict(state_dict)
+        except RuntimeError as e:
+            log.warning(f"Strict loading failed, trying non-strict: {e}")
+            model.load_state_dict(state_dict, strict=False)
 
     model.to(device)
-    tot = sum(p.numel() for p in model.parameters())
-    trn = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    log.info(f"Params: {tot:,} total, {trn:,} trainable")
+    
+    # Log model stats
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    log.info(f"Model Stats: {total_params:,} total parameters | {trainable_params:,} trainable")
+    
     return model
 
-
 def load_best_or_final(cfg, device):
-    """Load best trained model (fallback chain). Returns raw HF model."""
-    wd = cfg["paths"]["weights_dir"]
-    for name in ("best_model", "final_model", "detr_finetuned"):
-        p = os.path.join(wd, name)
-        if os.path.isdir(p) and os.listdir(p):
-            return build_detector(cfg, device, checkpoint=p)
-    log.warning("No trained model found — loading pretrained backbone")
-    return build_detector(cfg, device)
+    """
+    Helper to load the best trained model for inference/testing.
+    """
+    weights_dir = cfg["paths"]["weights_dir"]
+    
+    # Priority list
+    candidates = ["best_model", "final_model", "checkpoint_latest_backup.pth"]
+    
+    model_path = "facebook/detr-resnet-50" # Default fallback
+    
+    for name in candidates:
+        path = os.path.join(weights_dir, name)
+        if os.path.exists(path):
+            model_path = path
+            break
+            
+    log.info(f"Loading inference model from: {model_path}")
+    
+    model = DetrForObjectDetection.from_pretrained(
+        model_path,
+        revision="no_timm"
+    ).to(device)
+    model.eval()
+    
+    return model

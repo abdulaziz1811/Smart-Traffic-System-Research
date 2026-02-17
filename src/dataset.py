@@ -177,12 +177,24 @@ def _collate(batch, processor):
 
 
 def get_processor(cfg):
+    """
+    Returns the DETR Image Processor.
+    Now correctly pointing to the pretrained model path, not just the backbone name.
+    """
     m = cfg["model"]
+
+    model_path = m.get("pretrained_model", "facebook/detr-resnet-50")
+    
     return DetrImageProcessor.from_pretrained(
-        m["backbone"], do_resize=True,
-        size={"shortest_edge": m["image_size"]["shortest_edge"],
-              "longest_edge": m["image_size"]["longest_edge"]},
-        image_mean=m["image_mean"], image_std=m["image_std"])
+        model_path, 
+        do_resize=True,
+        size={
+            "shortest_edge": m["image_size"]["shortest_edge"],
+            "longest_edge": m["image_size"]["longest_edge"]
+        },
+        image_mean=m["image_mean"],
+        image_std=m["image_std"]
+    )
 
 
 def get_dataloaders(cfg, processor=None):

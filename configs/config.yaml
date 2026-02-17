@@ -4,6 +4,7 @@
 
 # ── Paths ────────────────────────────────────────────────
 paths:
+  # تأكد أنك وضعت الصور وملفات XML في هذه المسارات بالضبط داخل مجلد مشروعك
   images_dir: "data/raw/DETRAC-Images/DETRAC-Images"
   xml_dir: "data/annotations/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML"
   annotations_dir: "data/annotations"
@@ -24,7 +25,7 @@ dataset:
 augmentation:
   horizontal_flip: 0.5
   brightness_contrast: 0.2
-  crop_size: [480, 640]
+  crop_size: [480, 640] 
 
 # ── Model (DETR) ─────────────────────────────────────────
 model:
@@ -34,47 +35,35 @@ model:
   image_mean: [0.485, 0.456, 0.406]
   image_std:  [0.229, 0.224, 0.225]
 
-# ── Training ─────────────────────────────────────────────
+# ── Training (معدل ليتناسب مع MacBook) ───────────────────
 training:
   seed: 42
-  epochs: 15
-  batch_size: 8
-  gradient_accumulation: 4
+  epochs: 10                 # 10 دورات كافية كبداية
+  batch_size: 4              # خفضناه إلى 4 عشان الذاكرة ما تمتلئ
+  gradient_accumulation: 4   # تعويض عن الـ batch size الصغير
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
   max_grad_norm: 0.1
   scheduler: "cosine"
   warmup_ratio: 0.05
-  early_stopping: { enabled: true, patience: 5, min_delta: 0.001 }
-  checkpointing: { keep_last_n: 3 }
-  dataloader: { num_workers: 4, pin_memory: true, drop_last: true }
+  early_stopping: { enabled: true, patience: 3, min_delta: 0.001 }
+  checkpointing: { keep_last_n: 2 }
+  # مهم جداً للماك: workers=2 أفضل من 4 لتجنب مشاكل multiprocessing
+  dataloader: { num_workers: 2, pin_memory: true, drop_last: true }
 
 # ── Inference ────────────────────────────────────────────
 inference:
   confidence_threshold: 0.5
   nms_threshold: 0.5
 
-# ── Video ────────────────────────────────────────────────
-video:
-  fps: 25
-  codec: "mp4v"
-  show_overlay: true
-
-# ── Tracking (SORT) ─────────────────────────────────────
-tracking:
-  max_age: 30
-  min_hits: 3
-  iou_threshold: 0.3
-
 # ── Reinforcement Learning (RL) ──────────────────────────
-# Keys read directly by environment.py (TrafficSignalEnv)
+# هذه الإعدادات للمحاكاة (لن تؤثر على تدريب الموديل الحالي)
 rl:
-  num_approaches: 8         # 8 lanes: N/S straight + left, E/W straight + left
-  num_phases: 4             # 4-phase cycle: NS-str, NS-left, EW-str, EW-left
-  max_steps: 3600           # Episode length (seconds of simulation)
-  min_green: 5              # Minimum green time before allowing switch
-  max_green: 60             # Maximum green time before forced switch
-  service_rate: 0.6         # Vehicles cleared per step per green lane
-  arrival_rate_low: 0.02    # Min Poisson arrival rate (randomized per episode)
-  arrival_rate_high: 0.15   # Max Poisson arrival rate
-  switch_penalty: -5.0      # Penalty for unnecessary phase switches
+  num_approaches: 4
+  num_phases: 4
+  env_config:
+    render_mode: "rgb_array"
+    max_steps: 2000
+    green_duration: 30
+    yellow_duration: 4
+    red_duration: 2

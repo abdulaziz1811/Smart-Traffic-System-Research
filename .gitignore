@@ -1,16 +1,26 @@
-# Python & System
+# System Files
+.DS_Store
+Thumbs.db
+
+# Python & Environment
 __pycache__/
 *.py[cod]
-.DS_Store
 venv/
 .env
 
-# Data & Models (Big Files)
+# Large Data & Outputs
 data/
-models/weights/
-models/rl_agents/*.zip
-!models/rl_agents/final_ppo_agent.zip  # Keep only the final agent
 outputs/
-*.mp4
-*.xmlDETRAC-MOT-toolkit/
-DETRAC-MOT-toolkit/
+
+# Model Weights (Block ALL heavy model files)
+models/weights/
+*.pth
+*.pt
+*.safetensors
+*.bin
+*.ckpt
+*.h5
+
+# Executables (Block .exe files mentioned in errors)
+*.exe
+DETRAC-MOT-toolkit/**/*.exe
