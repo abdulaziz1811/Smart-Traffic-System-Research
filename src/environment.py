@@ -1,19 +1,41 @@
 """
-Traffic Signal RL Environment (Realistic Cycle Logic)
-=====================================================
-Philosophy:
-The agent acts as an adaptive timer. It must respect the cycle order
-(0 -> 1 -> 2 -> 3 -> 0) but decides exactly how long each phase lasts
-based on the queue length.
+Traffic Signal RL Environment V4 (Enhanced Observation + Proportional Rewards)
+===============================================================================
+Builds on V3 cyclic logic with two key improvements:
 
-Key Logic:
-- No random phase jumping (ensures synchronization).
-- Penalties for holding green on empty roads (Wasted Green).
-- Rewards for clearing the queue fully before switching.
+1. Richer Observation (22-dim instead of 14-dim):
+   - Added queue trend vector (8-dim) showing whether each lane is
+     growing or shrinking. Gives the agent temporal context beyond
+     a single snapshot, enabling proactive rather than reactive control.
+
+2. Proportional Reward Shaping:
+   - Wasted green penalty now scales with demand on OTHER lanes
+     (opportunity cost: wasting green is worse when others are waiting).
+   - Premature switch penalty scales with remaining vehicles in active
+     lane (interruption cost: switching mid-service is worse with more cars).
+
+Observation Layout (22-dim):
+   [0:8]   Queue lengths per lane (raw count)
+   [8:12]  Current phase one-hot encoding
+   [12]    Normalized green timer (0.0 to 1.0)
+   [13]    Next phase queue density (normalized)
+   [14:22] Queue trend per lane (current - previous, can be negative)
+
+Action Space: Discrete(2)
+   0 = Extend current green phase
+   1 = Advance to next phase in fixed cycle (0 -> 1 -> 2 -> 3 -> 0)
+
+Phase Mapping:
+   Phase 0: North/South Straight  (lanes 0, 2)
+   Phase 1: North/South Left      (lanes 1, 3)
+   Phase 2: East/West Straight    (lanes 4, 6)
+   Phase 3: East/West Left        (lanes 5, 7)
 """
 
 import logging
-from typing import Dict, Optional
+from typing import Optional
+from collections import deque
+
 import numpy as np
 
 try:
@@ -32,43 +54,44 @@ class TrafficSignalEnv(gym.Env):
     def __init__(self, cfg: dict):
         super().__init__()
         rc = cfg["rl"]
+
+        # --- Core dimensions ---
         self.n_app = rc["num_approaches"]
         self.n_phase = rc["num_phases"]
+
+        # --- Timing constraints ---
         self.max_steps = rc["max_steps"]
         self.min_green = rc["min_green"]
         self.max_green = rc["max_green"]
-        
-        # Traffic parameters
+
+        # --- Traffic flow parameters ---
         self.arr_low = rc.get("arrival_rate_low", 0.02)
         self.arr_high = rc.get("arrival_rate_high", 0.15)
         self.service = rc["service_rate"]
         self.switch_pen = rc.get("switch_penalty", -5.0)
 
-        # Phase Mapping (Standard 4-Phase Cycle)
-        # 0: North/South Straight
-        # 1: North/South Left
-        # 2: East/West Straight
-        # 3: East/West Left
+        # --- Trend history depth ---
+        self.trend_window = rc.get("trend_window", 4)
+
+        # --- Phase-to-lane mapping (standard 4-phase cycle) ---
         self.green_map = {
-            0: [0, 2],
-            1: [1, 3],
-            2: [4, 6],
-            3: [5, 7]
+            0: [0, 2],   # North/South Straight
+            1: [1, 3],   # North/South Left
+            2: [4, 6],   # East/West Straight
+            3: [5, 7],   # East/West Left
         }
 
-        # Observation Space
-        # [Queues(8), Phase_OH(4), Normalized_Timer(1), Next_Phase_Queue_Density(1)]
-        obs_dim = self.n_app + self.n_phase + 1 + 1
+        # --- Observation space (22-dim) ---
+        # queues(8) + phase_one_hot(4) + timer(1) + next_density(1) + trend(8)
+        obs_dim = self.n_app + self.n_phase + 1 + 1 + self.n_app
         self.observation_space = spaces.Box(
-            low=0, high=500, shape=(obs_dim,), dtype=np.float32
+            low=-500.0, high=500.0, shape=(obs_dim,), dtype=np.float32
         )
-        
-        # Action Space: BINARY
-        # 0: Extend Green (Keep current phase)
-        # 1: Switch to Next Phase (Standard Cycle)
+
+        # --- Action space: binary (extend or switch) ---
         self.action_space = spaces.Discrete(2)
 
-        # Internal State
+        # --- Internal state ---
         self.queues = np.zeros(self.n_app, dtype=np.float32)
         self.waits = np.zeros(self.n_app, dtype=np.float32)
         self.phase = 0
@@ -76,47 +99,58 @@ class TrafficSignalEnv(gym.Env):
         self.step_n = 0
         self.arrivals = np.zeros(self.n_app, dtype=np.float32)
         self.switches = 0
-        self.total_served = 0
+        self.total_served = 0.0
+        self.queue_history = deque(maxlen=self.trend_window)
+
+    # ------------------------------------------------------------------
+    #  Reset
+    # ------------------------------------------------------------------
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
-        
-        # Randomize traffic density
+
+        # Randomize per-lane arrival rates for this episode
         self.arrivals = self.np_random.uniform(
             self.arr_low, self.arr_high, size=self.n_app
         ).astype(np.float32)
-        
-        self.queues.fill(0)
-        self.waits.fill(0)
+
+        self.queues = np.zeros(self.n_app, dtype=np.float32)
+        self.waits = np.zeros(self.n_app, dtype=np.float32)
         self.phase = 0
         self.timer = 0
         self.step_n = 0
         self.switches = 0
-        self.total_served = 0
-        
+        self.total_served = 0.0
+
+        # Pre-fill trend history with zeros so it is valid from step 1
+        self.queue_history.clear()
+        for _ in range(self.trend_window):
+            self.queue_history.append(np.zeros(self.n_app, dtype=np.float32))
+
         return self._obs(), {}
+
+    # ------------------------------------------------------------------
+    #  Step
+    # ------------------------------------------------------------------
 
     def step(self, action):
         self.step_n += 1
         old_phase = self.phase
-        
-        # --- Logic: Cyclic Control ---
-        # Action 0: Extend Green Time
-        # Action 1: Switch to Next Phase (Sequential)
-        
-        # Enforce Minimum Green Time
+
+        # --- Enforce minimum green time ---
         if self.timer < self.min_green:
-            action = 0 # Force Keep
-        
+            action = 0
+
+        # --- Execute agent action ---
         if action == 1:
-            # Move to next phase in cycle (0->1->2->3->0)
+            # Advance to next phase in cycle (0 -> 1 -> 2 -> 3 -> 0)
             self.phase = (self.phase + 1) % self.n_phase
             self.timer = 0
             self.switches += 1
         else:
             self.timer += 1
-            
-        # Enforce Maximum Green Time
+
+        # --- Enforce maximum green time ---
         if self.timer >= self.max_green:
             self.phase = (self.phase + 1) % self.n_phase
             self.timer = 0
@@ -124,78 +158,125 @@ class TrafficSignalEnv(gym.Env):
 
         did_switch = (self.phase != old_phase)
 
-        # --- Simulation ---
+        # --- Traffic simulation: arrivals ---
         new_cars = self.np_random.poisson(self.arrivals)
         self.queues += new_cars
-        
-        served = 0.0
+
+        # --- Traffic simulation: service (green lanes clear vehicles) ---
         active_lanes = self.green_map[old_phase if did_switch else self.phase]
-        
-        # Calculate how many cars are WAITING in the active lanes
-        cars_in_green_lane = sum(self.queues[l] for l in active_lanes)
-        
+        cars_in_green = sum(self.queues[l] for l in active_lanes)
+
+        served = 0.0
         for lane in active_lanes:
             flow = self.service * self.np_random.uniform(0.8, 1.2)
             s = min(self.queues[lane], flow)
             self.queues[lane] -= s
             served += s
-            if self.queues[lane] > 0: self.waits[lane] *= 0.95
-            else: self.waits[lane] = 0
+            if self.queues[lane] > 0:
+                self.waits[lane] *= 0.95
+            else:
+                self.waits[lane] = 0.0
 
-        self.queues = np.maximum(self.queues, 0)
+        self.queues = np.maximum(self.queues, 0.0)
         self.waits += self.queues
         self.total_served += served
 
-        # --- Smart Reward Function ---
-        
-        # 1. Base Penalties (Queues & Waits)
-        queue_cost = -np.sum(self.queues ** 2) / 100.0
-        wait_cost = -np.sum(self.waits) / 500.0
-        
-        # 2. Logic Reward: Wasted Green Time Penalty
-        # If agent says "Keep" (Action 0) but lanes are empty -> HEAVY Penalty
-        wasted_green_penalty = 0.0
-        if action == 0 and cars_in_green_lane < 1.0:
-            wasted_green_penalty = -5.0
-            
-        # 3. Logic Reward: Premature Switch Penalty
-        # If agent says "Switch" (Action 1) but lanes are full -> Penalty
-        premature_switch_penalty = 0.0
-        if action == 1 and cars_in_green_lane > 2.0: 
-            premature_switch_penalty = -5.0
-            
-        # 4. Service Reward
-        service_reward = served * 3.0
+        # --- Record queue snapshot for trend computation ---
+        self.queue_history.append(self.queues.copy())
 
-        reward = queue_cost + wait_cost + wasted_green_penalty + premature_switch_penalty + service_reward
+        # --- Compute reward ---
+        reward = self._compute_reward(action, cars_in_green, served)
 
         terminated = False
         truncated = self.step_n >= self.max_steps
-        
+
         return self._obs(), float(reward), terminated, truncated, self._info()
 
+    # ------------------------------------------------------------------
+    #  Reward: proportional shaping
+    # ------------------------------------------------------------------
+
+    def _compute_reward(self, action, cars_in_green, served):
+        """
+        Multi-component reward with proportional penalty scaling.
+
+        Components:
+          1. queue_cost        -- quadratic penalty on total queue length
+          2. wait_cost         -- linear penalty on accumulated wait times
+          3. wasted_green      -- proportional to OTHER lanes demand
+          4. premature_switch  -- proportional to active lane occupancy
+          5. service_reward    -- per-vehicle bonus for clearing queues
+        """
+        # 1. Base cost: penalize long queues (quadratic = punish extremes more)
+        queue_cost = -np.sum(self.queues ** 2) / 100.0
+
+        # 2. Wait cost: penalize accumulated waiting (encourages throughput)
+        wait_cost = -np.sum(self.waits) / 500.0
+
+        # 3. Wasted green: extending on empty lane while others wait
+        #    Penalty scales with how many vehicles are stuck on OTHER lanes.
+        #    Empty lane + empty intersection = small penalty (-1.0)
+        #    Empty lane + 20 cars waiting elsewhere = large penalty (-3.0)
+        wasted_green = 0.0
+        if action == 0 and cars_in_green < 1.0:
+            waiting_others = max(np.sum(self.queues) - cars_in_green, 0.0)
+            wasted_green = -1.0 * (1.0 + waiting_others / 10.0)
+
+        # 4. Premature switch: switching while active lane still has vehicles
+        #    Penalty scales with how many vehicles remain (interruption cost).
+        #    2 cars remaining = small penalty (-0.4)
+        #    15 cars remaining = large penalty (-3.0)
+        premature_switch = 0.0
+        if action == 1 and cars_in_green > 2.0:
+            premature_switch = -1.0 * (cars_in_green / 5.0)
+
+        # 5. Service reward: bonus per vehicle cleared
+        service_reward = served * 3.0
+
+        return (queue_cost + wait_cost + wasted_green
+                + premature_switch + service_reward)
+
+    # ------------------------------------------------------------------
+    #  Observation
+    # ------------------------------------------------------------------
+
     def _obs(self):
-        phase_oh = np.zeros(self.n_phase)
-        phase_oh[self.phase] = 1
-        
-        normalized_timer = self.timer / self.max_green
-        
-        # Add context: How busy is the NEXT phase?
+        # Current phase as one-hot vector
+        phase_oh = np.zeros(self.n_phase, dtype=np.float32)
+        phase_oh[self.phase] = 1.0
+
+        # Normalized green timer (0.0 = just switched, 1.0 = about to force-switch)
+        norm_timer = self.timer / max(self.max_green, 1)
+
+        # Next phase queue density (how busy are the lanes that go next)
         next_p = (self.phase + 1) % self.n_phase
         next_lanes = self.green_map[next_p]
-        next_density = sum(self.queues[l] for l in next_lanes) / 50.0 # Normalize
-        
+        next_density = sum(self.queues[l] for l in next_lanes) / 50.0
+
+        # Queue trend: difference between current and recent past
+        # Positive = lane is getting more congested
+        # Negative = lane is clearing
+        if len(self.queue_history) >= 2:
+            trend = self.queues - self.queue_history[-2]
+        else:
+            trend = np.zeros(self.n_app, dtype=np.float32)
+
         obs = np.concatenate([
-            self.queues,
-            phase_oh,
-            [normalized_timer],
-            [next_density] # Critical for deciding to switch
+            self.queues,            # [0:8]   per-lane queue lengths
+            phase_oh,               # [8:12]  current phase
+            [norm_timer],           # [12]    green timer progress
+            [next_density],         # [13]    next phase demand
+            trend,                  # [14:22] queue growth direction
         ])
         return obs.astype(np.float32)
+
+    # ------------------------------------------------------------------
+    #  Info dict
+    # ------------------------------------------------------------------
 
     def _info(self):
         return {
             "switches": self.switches,
             "served": self.total_served,
-            "avg_queue": np.mean(self.queues)
+            "avg_queue": float(np.mean(self.queues)),
         }

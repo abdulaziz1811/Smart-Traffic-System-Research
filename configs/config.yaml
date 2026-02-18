@@ -1,10 +1,9 @@
-# ╔══════════════════════════════════════════════════════════╗
-# ║  Smart Traffic Signal Control System — Configuration    ║
-# ╚══════════════════════════════════════════════════════════╝
+# =====================================================================
+#  Smart Traffic Signal Control System -- Configuration
+# =====================================================================
 
-# ── Paths ────────────────────────────────────────────────
+# -- Paths ------------------------------------------------------------
 paths:
-  # تأكد أنك وضعت الصور وملفات XML في هذه المسارات بالضبط داخل مجلد مشروعك
   images_dir: "data/raw/DETRAC-Images/DETRAC-Images"
   xml_dir: "data/annotations/DETRAC-Train-Annotations-XML/DETRAC-Train-Annotations-XML"
   annotations_dir: "data/annotations"
@@ -12,7 +11,7 @@ paths:
   results_dir: "outputs/results"
   log_dir: "outputs/logs"
 
-# ── Dataset ──────────────────────────────────────────────
+# -- Dataset ----------------------------------------------------------
 dataset:
   name: "UA-DETRAC"
   split_ratios: { train: 0.70, val: 0.15, test: 0.15 }
@@ -21,13 +20,13 @@ dataset:
   id2label: { 1: "Car", 2: "Bus", 3: "Van", 4: "Others" }
   default_image_size: [960, 540]
 
-# ── Augmentation ─────────────────────────────────────────
+# -- Augmentation -----------------------------------------------------
 augmentation:
   horizontal_flip: 0.5
   brightness_contrast: 0.2
-  crop_size: [480, 640] 
+  crop_size: [480, 640]
 
-# ── Model (DETR) ─────────────────────────────────────────
+# -- Model (DETR) -----------------------------------------------------
 model:
   backbone: "resnet50"
   pretrained_model: "facebook/detr-resnet-50"
@@ -35,12 +34,12 @@ model:
   image_mean: [0.485, 0.456, 0.406]
   image_std:  [0.229, 0.224, 0.225]
 
-# ── Training (معدل ليتناسب مع MacBook) ───────────────────
+# -- Training (tuned for MacBook) -------------------------------------
 training:
   seed: 42
-  epochs: 10                 # 10 دورات كافية كبداية
-  batch_size: 4              # خفضناه إلى 4 عشان الذاكرة ما تمتلئ
-  gradient_accumulation: 4   # تعويض عن الـ batch size الصغير
+  epochs: 10
+  batch_size: 4
+  gradient_accumulation: 4
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
   max_grad_norm: 0.1
@@ -48,22 +47,30 @@ training:
   warmup_ratio: 0.05
   early_stopping: { enabled: true, patience: 3, min_delta: 0.001 }
   checkpointing: { keep_last_n: 2 }
-  # مهم جداً للماك: workers=2 أفضل من 4 لتجنب مشاكل multiprocessing
   dataloader: { num_workers: 2, pin_memory: true, drop_last: true }
 
-# ── Inference ────────────────────────────────────────────
+# -- Inference --------------------------------------------------------
 inference:
   confidence_threshold: 0.5
   nms_threshold: 0.5
 
-# ── Reinforcement Learning (RL) ──────────────────────────
-# هذه الإعدادات للمحاكاة (لن تؤثر على تدريب الموديل الحالي)
+# -- Tracking (SORT) --------------------------------------------------
+tracking:
+  max_age: 30
+  min_hits: 3
+  iou_threshold: 0.3
+
+# -- Reinforcement Learning -------------------------------------------
+# All keys below are read directly by TrafficSignalEnv.__init__().
+# Do NOT nest them under "env_config" -- the environment reads them flat.
 rl:
-  num_approaches: 4
-  num_phases: 4
-  env_config:
-    render_mode: "rgb_array"
-    max_steps: 2000
-    green_duration: 30
-    yellow_duration: 4
-    red_duration: 2
+  num_approaches: 8         # 8 lanes: N/S/E/W x straight + left turn
+  num_phases: 4             # 4-phase cycle: NS-str, NS-left, EW-str, EW-left
+  max_steps: 3600           # episode length in simulation seconds
+  min_green: 5              # minimum green before agent can switch (seconds)
+  max_green: 60             # forced switch after this duration (seconds)
+  service_rate: 0.6         # vehicles cleared per step per green lane
+  arrival_rate_low: 0.02    # min Poisson arrival rate (randomized per episode)
+  arrival_rate_high: 0.15   # max Poisson arrival rate
+  switch_penalty: -5.0      # base penalty for unnecessary switches
+  trend_window: 4           # past steps used to compute queue trend vector
