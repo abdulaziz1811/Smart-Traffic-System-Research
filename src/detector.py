@@ -50,14 +50,14 @@ class DETRDetector:
             self.model = DetrForObjectDetection.from_pretrained(
                 self.model_path,
                 revision="no_timm"
-            ).to(self.device)
+            ).to(self.device) # type: ignore
             self.model.eval()
             
         except Exception as e:
             log.error(f"Failed to load model from {self.model_path}: {e}")
             log.warning("Falling back to default 'facebook/detr-resnet-50'...")
             self.processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50", revision="no_timm")
-            self.model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50", revision="no_timm").to(self.device)
+            self.model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50", revision="no_timm").to(self.device) # type: ignore
 
     def _find_best_model_path(self):
         """Helper to find the most relevant model checkpoint."""
@@ -90,12 +90,12 @@ class DETRDetector:
         # Post-process (convert logits to boxes)
         target_sizes = torch.tensor([image.size[::-1]]).to(self.device)
         results = self.processor.post_process_object_detection(
-            outputs, target_sizes=target_sizes, threshold=conf_thresh
+            outputs, target_sizes=target_sizes, threshold=conf_thresh # type: ignore
         )[0]
 
         detections = []
         for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
-            box = [round(i, 2) for i in box.tolist()]
+            box = [round(float(i), 2) for i in box.tolist()]
             # Append [x1, y1, x2, y2, score, class_id]
             detections.append([*box, score.item(), label.item()])
 

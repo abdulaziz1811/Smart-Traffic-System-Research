@@ -52,10 +52,10 @@ def evaluate_map(model, processor, loader, device):
                             "area":bw*w*bh*h, "iscrowd":0})
 
     if not preds or not gts: return {"mAP@50:95":0., "mAP@50":0., "mAP@75":0.}
-    gt_o = COCO(); gt_o.dataset = {
+    gt_o = COCO(); gt_o.dataset = { # type: ignore
         "images":[{"id":i} for i in {g["image_id"] for g in gts}],
         "annotations":gts, "categories":[{"id":c} for c in {g["category_id"] for g in gts}]}
-    gt_o.createIndex(); dt_o = gt_o.loadRes(preds)
+    gt_o.createIndex(); dt_o = gt_o.loadRes(preds) # type: ignore
     ev = COCOeval(gt_o, dt_o, "bbox"); ev.evaluate(); ev.accumulate(); ev.summarize()
     return {"mAP@50:95":ev.stats[0], "mAP@50":ev.stats[1], "mAP@75":ev.stats[2],
             "mAP_small":ev.stats[3], "mAP_medium":ev.stats[4], "mAP_large":ev.stats[5]}
@@ -156,6 +156,7 @@ class Trainer:
         log.info("═"*55)
 
         hist = {"train_loss":[],"val_loss":[],"mAP@50":[],"mAP@75":[],"mAP@50:95":[]}
+        m = {}
         for ep in range(self.epochs):
             t0 = time.time()
             tl = self._train_ep(train_ld, ep); hist["train_loss"].append(tl)

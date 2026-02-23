@@ -96,6 +96,7 @@ def run_episode(cfg, get_action, seed, max_steps=3600):
 
     total_reward = 0.0
     queue_history = []
+    info = {"served": 0.0, "switches": 0, "avg_queue": 0.0}
 
     for step in range(max_steps):
         action = get_action(obs, step)
@@ -285,7 +286,7 @@ def plot_combined(summaries, out_dir, window=50):
 
     fig.suptitle("Comparative Evaluation of Traffic Signal Control Strategies",
                  fontsize=15, fontweight="bold")
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.tight_layout(rect=(0, 0, 1, 0.96))
     path = os.path.join(out_dir, "fig3_combined_paper.png")
     plt.savefig(path, bbox_inches="tight")
     plt.close()
@@ -300,8 +301,8 @@ def plot_boxes(summaries, out_dir):
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
     for ax, key, title in [
-        (axes[0], "avg_queue",    "Avg Queue Length"),
-        (axes[1], "total_served", "Total Throughput"),
+        (axes[0], "avg_queue",    "Avg Queue Length"), # type: ignore
+        (axes[1], "total_served", "Total Throughput"), # type: ignore
     ]:
         data, tick_labels, clrs = [], [], []
         for s in summaries:
@@ -311,7 +312,7 @@ def plot_boxes(summaries, out_dir):
 
         bp = ax.boxplot(
             data, tick_labels=tick_labels, patch_artist=True, widths=0.6,
-            medianprops=dict(color="black", linewidth=2),
+            medianprops={"color": "black", "linewidth": 2},
         )
         for patch, c in zip(bp["boxes"], clrs):
             patch.set_facecolor(c)
@@ -411,8 +412,8 @@ def main():
         model = PPO.load(path)
 
         # Check observation space compatibility
-        env_dim = TrafficSignalEnv(cfg).observation_space.shape[0]
-        model_dim = model.observation_space.shape[0]
+        env_dim = TrafficSignalEnv(cfg).observation_space.shape[0] # type: ignore
+        model_dim = model.observation_space.shape[0] # type: ignore
         if env_dim != model_dim:
             print(f"  [SKIP] {name}: obs mismatch (env={env_dim}, model={model_dim}). "
                   f"Retrain with new environment.")
@@ -438,8 +439,8 @@ def main():
     save = []
     for s in summaries:
         d = {k: v for k, v in s.items() if k != "runs"}
-        d["per_seed_avg_queue"] = [float(r["avg_queue"]) for r in s["runs"]]
-        d["per_seed_served"]    = [float(r["total_served"]) for r in s["runs"]]
+        d["per_seed_avg_queue"] = [float(r["avg_queue"]) for r in s["runs"]] # type: ignore
+        d["per_seed_served"]    = [float(r["total_served"]) for r in s["runs"]] # type: ignore
         save.append(d)
 
     jpath = os.path.join(args.output, "results.json")

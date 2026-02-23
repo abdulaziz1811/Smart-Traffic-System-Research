@@ -81,13 +81,13 @@ def evaluate_full(model, processor, loader, device):
 
     # Build COCO objects
     gt_coco = COCO()
-    gt_coco.dataset = {
+    gt_coco.dataset = { # type: ignore
         "images": [{"id": i} for i in sorted({g["image_id"] for g in gts})],
         "annotations": gts,
         "categories": [{"id": c} for c in sorted({g["category_id"] for g in gts})],
     }
     gt_coco.createIndex()
-    dt_coco = gt_coco.loadRes(preds)
+    dt_coco = gt_coco.loadRes(preds) # type: ignore
 
     # ── Overall mAP ──
     ev = COCOeval(gt_coco, dt_coco, "bbox")

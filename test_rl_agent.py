@@ -139,8 +139,8 @@ def main():
     model = PPO.load(model_path)
 
     # -- Verify observation space compatibility --
-    env_obs_dim = env.observation_space.shape[0]
-    model_obs_dim = model.observation_space.shape[0]
+    env_obs_dim = env.observation_space.shape[0] # type: ignore
+    model_obs_dim = model.observation_space.shape[0] # type: ignore
     if env_obs_dim != model_obs_dim:
         print(f"WARNING: Observation dimension mismatch!")
         print(f"  Environment expects: {env_obs_dim}")
@@ -152,6 +152,7 @@ def main():
     obs, _ = env.reset()
     total_reward = 0.0
     step = 0
+    info = {"served": 0.0, "switches": 0, "avg_queue": 0.0}
 
     print()
     print("=" * 60)

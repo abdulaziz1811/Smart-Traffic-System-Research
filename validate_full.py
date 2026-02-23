@@ -145,7 +145,7 @@ def run_validation(cfg, n_seeds=10, output_dir="outputs/validation"):
         "Random": lambda obs, env=None, rng=None: random_policy(obs, env, rng),
     }
     if ai_model:
-        policies["AI_Agent"] = lambda obs, env=None, rng=None: int(ai_model.predict(obs, deterministic=True)[0])
+        policies["AI_Agent"] = lambda obs, env=None, rng=None: int(ai_model.predict(obs, deterministic=True)[0]) # type: ignore
     
     # ── Run all combinations ──
     all_results = {}  # {scenario: {policy: [metrics_per_seed]}}
@@ -165,8 +165,8 @@ def run_validation(cfg, n_seeds=10, output_dir="outputs/validation"):
             for seed in seeds:
                 # Create fresh env with scenario-specific arrivals
                 env = TrafficSignalEnv(cfg)
-                env.arr_low = sc_cfg["arrival_low"]
-                env.arr_high = sc_cfg["arrival_high"]
+                env.arr_low = sc_cfg["arrival_low"] # type: ignore
+                env.arr_high = sc_cfg["arrival_high"] # type: ignore
                 
                 rng = np.random.default_rng(seed)
                 
@@ -177,7 +177,7 @@ def run_validation(cfg, n_seeds=10, output_dir="outputs/validation"):
                 metrics = run_episode(env, wrapped_policy, seed)
                 seed_results.append(metrics)
             
-            all_results[sc_name][pol_name] = seed_results
+            all_results[sc_name][pol_name] = seed_results # type: ignore
             
             avg_q = np.mean([r["avg_queue"] for r in seed_results])
             print(f"done ({time.time()-t0:.1f}s) — avg_queue={avg_q:.2f}")
@@ -210,7 +210,7 @@ def run_validation(cfg, n_seeds=10, output_dir="outputs/validation"):
             row = f"{metric_label:<20s}"
             values = {}
             for pol_name in policies:
-                vals = [r[metric_key] for r in all_results[sc_name][pol_name]]
+                vals = [r[metric_key] for r in all_results[sc_name][pol_name]] # type: ignore
                 mean, std = np.mean(vals), np.std(vals)
                 values[pol_name] = (mean, std)
                 row += f" | {mean:>9.2f} ± {std:>5.2f}"
@@ -223,19 +223,19 @@ def run_validation(cfg, n_seeds=10, output_dir="outputs/validation"):
     if ai_model:
         print(f"\n\n── IMPROVEMENT vs Fixed Timer ──")
         for sc_name in SCENARIOS:
-            fixed_q = np.mean([r["avg_queue"] for r in all_results[sc_name]["Fixed_30s"]])
-            ai_q = np.mean([r["avg_queue"] for r in all_results[sc_name]["AI_Agent"]])
+            fixed_q = np.mean([r["avg_queue"] for r in all_results[sc_name]["Fixed_30s"]]) # type: ignore
+            ai_q = np.mean([r["avg_queue"] for r in all_results[sc_name]["AI_Agent"]]) # type: ignore
             improvement = (fixed_q - ai_q) / fixed_q * 100
             print(f"  {sc_name:<20s}: {improvement:>+.1f}% queue reduction")
     
     # ── Save Raw Data ──
-    save_data = {}
+    save_data: dict = {}
     for sc in all_results:
         save_data[sc] = {}
-        for pol in all_results[sc]:
-            save_data[sc][pol] = []
-            for r in all_results[sc][pol]:
-                save_data[sc][pol].append({
+        for pol in all_results[sc]: # type: ignore
+            save_data[sc][pol] = [] # type: ignore
+            for r in all_results[sc][pol]: # type: ignore
+                save_data[sc][pol].append({ # type: ignore
                     k: v for k, v in r.items() if k != "queue_history"
                 })
     
@@ -265,7 +265,7 @@ def generate_plots(all_results, policies, output_dir):
     fig.suptitle("Average Queue Length Comparison", fontsize=14, fontweight="bold")
     
     for idx, (sc_name, sc_cfg) in enumerate(SCENARIOS.items()):
-        ax = axes[idx]
+        ax = axes[idx] # type: ignore
         names, means, stds = [], [], []
         for pol_name in policies:
             vals = [r["avg_queue"] for r in all_results[sc_name][pol_name]]

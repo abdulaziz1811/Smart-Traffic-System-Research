@@ -13,7 +13,7 @@ import os, json, random, logging
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from functools import partial
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 import torch
 from torch.utils.data import DataLoader
@@ -42,10 +42,15 @@ def _parse_xml(xml_path, img_dir, cat_map, default_sz, verify=False):
     tree = ET.parse(xml_path)
     root = tree.getroot()
     seq = root.get("name")
-    imgs, anns, stats = [], [], defaultdict(int)
+    from typing import Dict, List, Any
+    imgs: List[Dict[str, Any]] = []
+    anns: List[List[Dict[str, Any]]] = []
+    stats: Dict[str, int] = defaultdict(int)
 
     for frame in root.findall("frame"):
-        num = int(frame.get("num"))
+        num_str = frame.get("num")
+        if num_str is None: continue
+        num = int(num_str)
         rel = f"{seq}/img{num:05d}.jpg"
         full = os.path.join(img_dir, rel)
         if verify and not os.path.isfile(full): continue
@@ -58,11 +63,12 @@ def _parse_xml(xml_path, img_dir, cat_map, default_sz, verify=False):
         if tl is not None:
             for t in tl.findall("target"):
                 bx = t.find("box"); attr = t.find("attribute")
-                bbox = [float(bx.get("left")), float(bx.get("top")),
-                        float(bx.get("width")), float(bx.get("height"))]
-                vtype = attr.get("vehicle_type", "others").lower()
-                cid = cat_map.get(vtype, cat_map.get("others", 4))
-                stats[vtype] += 1
+                if bx is None or attr is None: continue
+                bbox = [float(bx.get("left", 0)), float(bx.get("top", 0)),
+                        float(bx.get("width", 0)), float(bx.get("height", 0))]
+                vtype = attr.get("vehicle_type", "others").lower() # type: ignore
+                cid = cat_map.get(vtype, cat_map.get("others", 4)) # type: ignore
+                stats[vtype] += 1 # type: ignore
                 frame_anns.append({"category_id": cid, "bbox": bbox,
                                    "area": bbox[2]*bbox[3], "iscrowd": 0})
         anns.append(frame_anns)
@@ -70,13 +76,14 @@ def _parse_xml(xml_path, img_dir, cat_map, default_sz, verify=False):
 
 
 def _to_coco(imgs, ann_groups, cat_map):
-    coco = {"images": [], "annotations": [],
+    coco: Dict[str, Any] = {"images": [], "annotations": [],
             "categories": [{"id": v, "name": k} for k, v in cat_map.items()]}
     iid = aid = 1
     for entry, ag in zip(imgs, ann_groups):
-        coco["images"].append({"id": iid, **entry})
+        coco["images"].append({"id": iid, **entry})  # type: ignore
         for a in ag:
-            coco["annotations"].append({"id": aid, "image_id": iid, **a}); aid += 1
+            coco["annotations"].append({"id": aid, "image_id": iid, **a})  # type: ignore
+            aid += 1
         iid += 1
     return coco
 
@@ -91,33 +98,35 @@ def convert_detrac(cfg: dict, verify_images: bool = False):
 
     log.info(f"Parsing {len(xml_files)} XML files …")
 
-    seq_data = {}; totals = defaultdict(int)
+    seq_data: Dict[str, Tuple[List[Dict[str, Any]], List[List[Dict[str, Any]]]]] = {}
+    totals: Dict[str, int] = defaultdict(int)
     for xf in tqdm(xml_files, desc="Parsing"):
         try:
             ims, ans, st = _parse_xml(os.path.join(p["xml_dir"], xf),
                                        p["images_dir"], cat_map, default_sz, verify_images)
             seq_data[xf.replace(".xml","")] = (ims, ans)
-            for k,v in st.items(): totals[k] += v
+            for k,v in st.items(): totals[k] += int(v) # type: ignore
         except Exception as e:
             log.warning(f"Skip {xf}: {e}")
 
     # Class distribution
     total = sum(totals.values())
+    if total == 0: total = 1 # type: ignore
     log.info("── Class Distribution ──")
-    for cls, cnt in sorted(totals.items(), key=lambda x: -x[1]):
-        log.info(f"  {cls:>10s}: {cnt:>8,d}  ({cnt/total*100:.1f}%)")
+    for cls, cnt in sorted(totals.items(), key=lambda x: -x[1]): # type: ignore
+        log.info(f"  {cls:>10s}: {cnt:>8,d}  ({cnt/total*100:.1f}%)") # type: ignore
 
     # Sequence-level split (prevents data leakage)
-    seqs = sorted(seq_data.keys()); rng = random.Random(seed); rng.shuffle(seqs)
+    seqs = sorted(list(seq_data.keys())); rng = random.Random(seed); rng.shuffle(seqs)
     r = ds["split_ratios"]; n = len(seqs)
     nt = int(n*r["train"]); nv = int(n*r["val"])
-    splits = {"train": seqs[:nt], "val": seqs[nt:nt+nv], "test": seqs[nt+nv:]}
+    splits = {"train": list(seqs[:nt]), "val": list(seqs[nt:nt+nv]), "test": list(seqs[nt+nv:])} # type: ignore
 
     out = p["annotations_dir"]; os.makedirs(out, exist_ok=True)
     for name, sl in splits.items():
         ai, aa = [], []
         for s in sl:
-            if s in seq_data: i,a = seq_data[s]; ai.extend(i); aa.extend(a)
+            if s in seq_data: i,a = seq_data[s]; ai.extend(i); aa.extend(a) # type: ignore
         coco = _to_coco(ai, aa, cat_map)
         fp = os.path.join(out, f"{name}.json")
         with open(fp, "w") as f: json.dump(coco, f)
@@ -145,7 +154,7 @@ class Augmentation:
     def __call__(self, image, target):
         if self.jitter: image = self.jitter(image)
         if self.flip and torch.rand(1).item() < self.flip_p:
-            image = image.transpose(Image.FLIP_LEFT_RIGHT)
+            image = image.transpose(Image.FLIP_LEFT_RIGHT) # type: ignore
             w = image.width
             for a in target.get("annotations", []):
                 b = a["bbox"]; a["bbox"] = [w-b[0]-b[2], b[1], b[2], b[3]]
@@ -158,10 +167,10 @@ class Augmentation:
 
 class DetrDataset(CocoDetection):
     def __init__(self, img_dir, ann_file, processor, aug=None):
-        super().__init__(img_dir, ann_file)
+        super(DetrDataset, self).__init__(img_dir, ann_file)  # type: ignore
         self.processor = processor; self.aug = aug
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx): # type: ignore
         img, target = super().__getitem__(idx)
         target = {"image_id": self.ids[idx], "annotations": target}
         if self.aug: img, target = self.aug(img, target)

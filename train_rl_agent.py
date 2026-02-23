@@ -77,7 +77,7 @@ class CyclicTrafficEnv(gym.Wrapper):
     """
 
     def __init__(self, env):
-        super().__init__(env)
+        super().__init__(env) # type: ignore
         self.action_space = spaces.Discrete(2)
 
     def step(self, action):
@@ -95,7 +95,7 @@ class QueueLogger(BaseCallback):
     """
 
     def __init__(self, window=1000, verbose=0):
-        super().__init__(verbose)
+        super().__init__(verbose) # type: ignore
         self.window = window
         self.buffer = []
         self.history = []
@@ -138,7 +138,7 @@ class CurriculumCallback(BaseCallback):
     ]
 
     def __init__(self, total_steps, verbose=0):
-        super().__init__(verbose)
+        super().__init__(verbose) # type: ignore
         self.total_steps = total_steps
         self.current_stage = -1
 
@@ -151,7 +151,7 @@ class CurriculumCallback(BaseCallback):
             params = self.STAGES[stage_idx]
 
             # Reach through wrappers to the actual TrafficSignalEnv
-            env = self.training_env.envs[0]
+            env = self.training_env.envs[0] # type: ignore
             target = env.unwrapped if hasattr(env, "unwrapped") else env
             target.arr_low = params["arr_low"]
             target.arr_high = params["arr_high"]
@@ -216,7 +216,7 @@ def train_agent(name, env, total_steps, rl_dir, use_curriculum=True, verbose=1):
     )
 
     queue_log = QueueLogger()
-    callbacks = [queue_log]
+    callbacks: list[BaseCallback] = [queue_log]
 
     if use_curriculum:
         callbacks.append(CurriculumCallback(total_steps, verbose=verbose))

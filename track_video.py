@@ -40,9 +40,12 @@ class SmartTrafficSystem:
         
         # Initialize State Variables
         self.queues = np.zeros(8, dtype=np.float32)
-        self.waits = np.zeros(8, dtype=np.float32)
+        self.prev_queues = np.zeros(8, dtype=np.float32)
         self.current_phase = 0
         self.timer = 0
+        self.max_green = 60  # matches config default
+        self.n_phase = 4
+        self.green_map = {0: [0, 2], 1: [1, 3], 2: [4, 6], 3: [5, 7]}
         
         # ROI Zones (Adjust coordinates based on your video resolution)
         self.zones = {
@@ -106,29 +109,32 @@ class SmartTrafficSystem:
             self.update_counts(tracks)
             self.timer += 1
             
-            # 3. Prepare RL Observation
-            # State: [Queues(8), Phase(4), Timer(1), Waits(8)]
-            phase_oh = np.zeros(4)
-            phase_oh[self.current_phase] = 1
-            obs = np.concatenate([self.queues, phase_oh, [self.timer], self.waits]).astype(np.float32)
+            # 3. Prepare RL Observation (V4: 22-dim)
+            # Layout: [queues(8), phase_one_hot(4), timer(1), next_density(1), trend(8)]
+            phase_oh = np.zeros(self.n_phase, dtype=np.float32)
+            phase_oh[self.current_phase] = 1.0
+            norm_timer = self.timer / max(self.max_green, 1)
+            next_p = (self.current_phase + 1) % self.n_phase
+            next_lanes = self.green_map[next_p]
+            next_density = sum(self.queues[l] for l in next_lanes) / 50.0
+            trend = self.queues - self.prev_queues
+            obs = np.concatenate([
+                self.queues, phase_oh, [norm_timer], [next_density], trend
+            ]).astype(np.float32)
+            self.prev_queues = self.queues.copy()
             
             # 4. Agent Decision
             action, _ = self.agent.predict(obs, deterministic=True)
             
-            # 5. Execute Action
+            # 5. Execute Action (Discrete(2): 0=extend, 1=switch)
             status_text = "KEEP"
             status_color = (0, 255, 0)
             
             if action == 1:
-                self.current_phase = (self.current_phase + 1) % 4
+                self.current_phase = (self.current_phase + 1) % self.n_phase
                 self.timer = 0
                 status_text = "CHANGE -> NEXT"
                 status_color = (0, 165, 255)
-            elif action == 2:
-                # Simplified smart switch logic
-                self.timer = 0
-                status_text = "SMART SWITCH"
-                status_color = (0, 0, 255)
 
             # 6. Visualization
             # Draw Vehicle Bounding Boxes

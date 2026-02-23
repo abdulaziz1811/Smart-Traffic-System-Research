@@ -8,7 +8,7 @@ Inference Pipelines
 
 import os, time, logging
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Any
 
 import cv2, numpy as np, torch
 from PIL import Image
@@ -49,11 +49,13 @@ def process_video(model, processor, folder, output, device, threshold=0.5, fps=2
     if not frames: log.error(f"No images in {folder}"); return {}
 
     sample = cv2.imread(os.path.join(folder, frames[0]))
+    assert sample is not None
     h,w = sample.shape[:2]
     os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
-    writer = cv2.VideoWriter(output, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w,h))
+    writer = cv2.VideoWriter(output, getattr(cv2, "VideoWriter_fourcc")(*"mp4v"), fps, (w,h))
 
-    total_det, times = 0, []
+    total_det = 0
+    times: list[float] = []
     for i, fn in enumerate(tqdm(frames, desc="Detecting")):
         t0 = time.perf_counter()
         pil = Image.open(os.path.join(folder, fn)).convert("RGB")
@@ -83,11 +85,14 @@ def process_tracked_video(model, processor, tracker, folder, output, device,
     if not frames: log.error(f"No images in {folder}"); return {}
 
     sample = cv2.imread(os.path.join(folder, frames[0]))
+    assert sample is not None
     h,w = sample.shape[:2]
     os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
-    writer = cv2.VideoWriter(output, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w,h))
+    writer = cv2.VideoWriter(output, getattr(cv2, "VideoWriter_fourcc")(*"mp4v"), fps, (w,h))
 
-    uids, cmap, times = set(), {}, []
+    uids: set[int] = set()
+    cmap: dict[str, Any] = {}
+    times: list[float] = []
     for i, fn in enumerate(tqdm(frames, desc="Tracking")):
         t0 = time.perf_counter()
         pil = Image.open(os.path.join(folder, fn)).convert("RGB")

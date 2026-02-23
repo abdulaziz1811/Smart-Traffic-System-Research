@@ -56,16 +56,16 @@ class SafeTrainer(Trainer):
 
             outputs = self.model(pixel_values=pixel_values, labels=labels)
             loss = outputs.loss
-            loss = loss / self.gradient_accumulation
+            loss = loss / self.grad_accum
             loss.backward()
 
-            if (batch_idx + 1) % self.gradient_accumulation == 0:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-                self.optimizer.step()
-                self.optimizer.zero_grad()
+            if (batch_idx + 1) % self.grad_accum == 0:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_norm)
+                self.optim.step()
+                self.optim.zero_grad()
                 self.scheduler.step()
 
-            total_loss += loss.item() * self.gradient_accumulation
+            total_loss += loss.item() * self.grad_accum
 
             # 2. 🛡️ Time-Based Backup (Unique Names)
             current_time = time.time()
@@ -80,7 +80,7 @@ class SafeTrainer(Trainer):
                 torch.save({
                     'epoch': epoch_idx,
                     'model_state_dict': self.model.state_dict(),
-                    'optimizer_state_dict': self.optimizer.state_dict(),
+                    'optimizer_state_dict': self.optim.state_dict(),
                     'scheduler_state_dict': self.scheduler.state_dict(),
                 }, backup_path)
                 
@@ -133,7 +133,7 @@ def main():
         torch.save({
             'epoch': 'interrupted', # Marker
             'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': trainer.optimizer.state_dict(),
+            'optimizer_state_dict': trainer.optim.state_dict(),
         }, save_path)
         
         sys.exit(0)
@@ -144,8 +144,8 @@ def main():
         best = os.path.join(cfg["paths"]["weights_dir"], "best_model")
         if os.path.isdir(best):
             from transformers import DetrForObjectDetection
-            m = DetrForObjectDetection.from_pretrained(best).to(device)
-            evaluate_map(m, processor, test_ld, device, log)
+            m = DetrForObjectDetection.from_pretrained(best).to(device) # type: ignore
+            evaluate_map(m, processor, test_ld, device)
 
 if __name__ == "__main__":
     main()

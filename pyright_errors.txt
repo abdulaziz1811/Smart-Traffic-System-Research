@@ -1,0 +1,101 @@
+/Users/abdulaziz/Desktop/Smart-Traffic-System-V2/compare_agents.py
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/compare_agents.py:114:32 - error: "info" is possibly unbound (reportPossiblyUnboundVariable)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/compare_agents.py:115:32 - error: "info" is possibly unbound (reportPossiblyUnboundVariable)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/compare_agents.py:288:27 - error: Argument of type "list[int | float]" cannot be assigned to parameter "rect" of type "tuple[float, float, float, float] | None"
+    Type "list[int | float]" is not assignable to type "tuple[float, float, float, float] | None"
+      "list[int | float]" is not assignable to "tuple[float, float, float, float]"
+      "list[int | float]" is not assignable to "None" (reportArgumentType)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/compare_agents.py:415:21 - error: Object of type "None" is not subscriptable (reportOptionalSubscript)
+/Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/dataset.py
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/dataset.py:79:21 - error: "Any" is not defined (reportUndefinedVariable)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/dataset.py:101:46 - error: "Any" is not defined (reportUndefinedVariable)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/dataset.py:101:73 - error: "Any" is not defined (reportUndefinedVariable)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/dataset.py:156:43 - error: "FLIP_LEFT_RIGHT" is not a known attribute of module "PIL.Image" (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/dataset.py:172:9 - error: Method "__getitem__" overrides class "CocoDetection" in an incompatible manner
+    Return type mismatch: base method returns type "tuple[Any, Any]", override returns type "dict[str, Unknown]"
+      "dict[str, Unknown]" is not assignable to "tuple[Any, Any]" (reportIncompatibleMethodOverride)
+/Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/detector.py
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/detector.py:53:18 - error: Argument of type "device" cannot be assigned to parameter "self" of type "DetrForObjectDetection" in function "__call__"
+    "device" is not assignable to "DetrForObjectDetection" (reportArgumentType)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/detector.py:60:115 - error: Argument of type "device" cannot be assigned to parameter "self" of type "DetrForObjectDetection" in function "__call__"
+    "device" is not assignable to "DetrForObjectDetection" (reportArgumentType)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/detector.py:93:35 - error: Argument of type "Tensor" cannot be assigned to parameter "target_sizes" of type "TensorType | list[tuple[Unknown, ...]] | None" in function "post_process_object_detection"
+    Type "Tensor" is not assignable to type "TensorType | list[tuple[Unknown, ...]] | None"
+      "Tensor" is not assignable to "TensorType"
+      "Tensor" is not assignable to "list[tuple[Unknown, ...]]"
+      "Tensor" is not assignable to "None" (reportArgumentType)
+/Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/environment.py
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/environment.py:51:24 - error: Argument to class must be a base class (reportGeneralTypeIssues)
+/Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/inference.py
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/inference.py:52:18 - error: "shape" is not a known attribute of "None" (reportOptionalMemberAccess)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/inference.py:54:42 - error: "VideoWriter_fourcc" is not a known attribute of module "cv2" (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/inference.py:86:18 - error: "shape" is not a known attribute of "None" (reportOptionalMemberAccess)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/inference.py:88:42 - error: "VideoWriter_fourcc" is not a known attribute of module "cv2" (reportAttributeAccessIssue)
+/Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/tracker.py
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/tracker.py:19:9 - error: Expression with type "Tuple[float, ndarray[_AnyShape, dtype[Any]], ndarray[_AnyShape, dtype[Any]]] | Tuple[ndarray[_AnyShape, dtype[Any]], ndarray[_AnyShape, dtype[Any]]]" cannot be assigned to target tuple
+    Type "Tuple[ndarray[_AnyShape, dtype[Any]], ndarray[_AnyShape, dtype[Any]]]" is incompatible with target tuple
+      Tuple size mismatch; expected 3 but received 2 (reportAssignmentType)
+/Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/trainer.py
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/trainer.py:55:25 - error: Cannot assign to attribute "dataset" for class "COCO"
+    Type "list[dict[str, Unknown]]" is not assignable to item "images"
+      "list[dict[str, Unknown]]" is not assignable to "list[_Image]"
+        Type parameter "_T@list" is invariant, but "dict[str, Unknown]" is not the same as "_Image"
+        Consider switching from "list" to "Sequence" which is covariant
+    Type "list[dict[str, Unknown]]" is not assignable to item "categories"
+      "list[dict[str, Unknown]]" is not assignable to "list[_Category]"
+        Type parameter "_T@list" is invariant, but "dict[str, Unknown]" is not the same as "_Category"
+        Consider switching from "list" to "Sequence" which is covariant (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/trainer.py:58:45 - error: Argument of type "list[Unknown]" cannot be assigned to parameter "resFile" of type "str" in function "loadRes"
+    "list[Unknown]" is not assignable to "str" (reportArgumentType)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/src/trainer.py:181:47 - error: "m" is possibly unbound (reportPossiblyUnboundVariable)
+/Users/abdulaziz/Desktop/Smart-Traffic-System-V2/test_rl_agent.py
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/test_rl_agent.py:143:21 - error: Object of type "None" is not subscriptable (reportOptionalSubscript)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/test_rl_agent.py:185:39 - error: "info" is possibly unbound (reportPossiblyUnboundVariable)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/test_rl_agent.py:186:39 - error: "info" is possibly unbound (reportPossiblyUnboundVariable)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/test_rl_agent.py:187:39 - error: "info" is possibly unbound (reportPossiblyUnboundVariable)
+/Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train.py
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train.py:59:32 - error: Cannot access attribute "gradient_accumulation" for class "SafeTrainer*"
+    Attribute "gradient_accumulation" is unknown (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train.py:62:39 - error: Cannot access attribute "gradient_accumulation" for class "SafeTrainer*"
+    Attribute "gradient_accumulation" is unknown (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train.py:63:78 - error: Cannot access attribute "max_grad_norm" for class "SafeTrainer*"
+    Attribute "max_grad_norm" is unknown (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train.py:64:22 - error: Cannot access attribute "optimizer" for class "SafeTrainer*"
+    Attribute "optimizer" is unknown (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train.py:65:22 - error: Cannot access attribute "optimizer" for class "SafeTrainer*"
+    Attribute "optimizer" is unknown (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train.py:68:46 - error: Cannot access attribute "gradient_accumulation" for class "SafeTrainer*"
+    Attribute "gradient_accumulation" is unknown (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train.py:83:50 - error: Cannot access attribute "optimizer" for class "SafeTrainer*"
+    Attribute "optimizer" is unknown (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train.py:136:45 - error: Cannot access attribute "optimizer" for class "SafeTrainer"
+    Attribute "optimizer" is unknown (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train.py:147:65 - error: Argument of type "device" cannot be assigned to parameter "self" of type "DetrForObjectDetection" in function "__call__"
+    "device" is not assignable to "DetrForObjectDetection" (reportArgumentType)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train.py:148:57 - error: Expected 4 positional arguments (reportCallIssue)
+/Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train_rl_agent.py
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train_rl_agent.py:154:37 - error: Cannot access attribute "envs" for class "VecEnv"
+    Attribute "envs" is unknown (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train_rl_agent.py:222:26 - error: Argument of type "CurriculumCallback" cannot be assigned to parameter "object" of type "QueueLogger" in function "append"
+    "CurriculumCallback" is not assignable to "QueueLogger" (reportArgumentType)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/train_rl_agent.py:224:55 - error: Argument of type "list[QueueLogger]" cannot be assigned to parameter "callback" of type "MaybeCallback" in function "learn"
+    Type "list[QueueLogger]" is not assignable to type "MaybeCallback"
+      "list[QueueLogger]" is not assignable to "None"
+      Type "list[QueueLogger]" is not assignable to type "(...) -> Unknown"
+      "list[QueueLogger]" is not assignable to "list[BaseCallback]"
+        Type parameter "_T@list" is invariant, but "QueueLogger" is not the same as "BaseCallback"
+        Consider switching from "list" to "Sequence" which is covariant
+      "list[QueueLogger]" is not assignable to "BaseCallback" (reportArgumentType)
+/Users/abdulaziz/Desktop/Smart-Traffic-System-V2/validate_detection.py
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/validate_detection.py:84:13 - error: Cannot assign to attribute "dataset" for class "COCO"
+    Type "list[dict[str, Unknown]]" is not assignable to item "images"
+      "list[dict[str, Unknown]]" is not assignable to "list[_Image]"
+        Type parameter "_T@list" is invariant, but "dict[str, Unknown]" is not the same as "_Image"
+        Consider switching from "list" to "Sequence" which is covariant
+    Type "list[dict[str, Unknown]]" is not assignable to item "categories"
+      "list[dict[str, Unknown]]" is not assignable to "list[_Category]"
+        Type parameter "_T@list" is invariant, but "dict[str, Unknown]" is not the same as "_Category"
+        Consider switching from "list" to "Sequence" which is covariant (reportAttributeAccessIssue)
+  /Users/abdulaziz/Desktop/Smart-Traffic-System-V2/validate_detection.py:90:31 - error: Argument of type "list[Unknown]" cannot be assigned to parameter "resFile" of type "str" in function "loadRes"
+    "list[Unknown]" is not assignable to "str" (reportArgumentType)
+40 errors, 0 warnings, 0 informations

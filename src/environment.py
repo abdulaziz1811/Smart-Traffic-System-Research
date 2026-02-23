@@ -40,15 +40,15 @@ import numpy as np
 
 try:
     import gymnasium as gym
-    from gymnasium import spaces
+    from gymnasium import spaces, Env
 except ImportError:
     import gym
-    from gym import spaces
+    from gym import spaces, Env
 
 log = logging.getLogger("traffic")
 
 
-class TrafficSignalEnv(gym.Env):
+class TrafficSignalEnv(Env): # type: ignore
     metadata = {"render_modes": ["human"]}
 
     def __init__(self, cfg: dict):
