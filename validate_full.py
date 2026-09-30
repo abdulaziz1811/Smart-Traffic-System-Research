@@ -19,7 +19,7 @@ from collections import defaultdict
 from src.config import bootstrap
 from src.environment import TrafficSignalEnv
 from src.agents import load_agent, agent_is_compatible
-from src.baselines import fixed_time_policy, actuated_policy
+from src.baselines import fixed_time_policy, actuated_policy, longest_queue_policy
 
 # ══════════════════════════════════════════════════════════
 #  BASELINES
@@ -151,6 +151,7 @@ def run_validation(cfg, n_seeds=10, output_dir="outputs/validation", model_path=
     policies = {
         "Fixed_30s": (lambda obs, env=None, rng=None: fixed_time_policy(obs, env, 30), "cyclic"),
         "Actuated": (lambda obs, env=None, rng=None: actuated_policy(obs, env), "cyclic"),
+        "Longest_Queue": (lambda obs, env=None, rng=None: longest_queue_policy(obs, env), "free"),
         "Random": (lambda obs, env=None, rng=None: random_policy(obs, env, rng), "cyclic"),
     }
     if ai_model:
@@ -266,6 +267,7 @@ def generate_plots(all_results, policies, output_dir):
     colors = {
         "Fixed_30s": "#e74c3c",
         "Actuated": "#f39c12", 
+        "Longest_Queue": "#8e44ad",
         "Random": "#95a5a6",
         "AI_Agent": "#2ecc71",
     }
@@ -325,7 +327,7 @@ def generate_plots(all_results, policies, output_dir):
     if "AI_Agent" in policies:
         fig, ax = plt.subplots(figsize=(8, 4))
         metrics_for_heatmap = ["avg_queue", "max_queue", "total_served"]
-        baselines_for_heatmap = ["Fixed_30s", "Actuated", "Random"]
+        baselines_for_heatmap = ["Fixed_30s", "Actuated", "Longest_Queue", "Random"]
         
         improvements = np.zeros((len(baselines_for_heatmap), len(SCENARIOS)))
         

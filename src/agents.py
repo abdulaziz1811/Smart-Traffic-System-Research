@@ -5,7 +5,10 @@ One place for everything that must be identical between training and
 every script that uses a trained agent (evaluation, video, demo):
 
   DecisionStepWrapper  -- the agent only acts when its action can matter
-                          (skips clearance and min-green seconds)
+                          (skips clearance and min-green seconds). Note:
+                          PPO discounts per step, so a step spanning
+                          several seconds biases against switching; off
+                          by default in train_rl_agent.py.
   make_training_env()  -- parallel envs + VecNormalize (obs & reward)
   save_agent()         -- model .zip + <name>_vecnormalize.pkl
   load_agent()         -- TrainedAgent with .predict(obs) that applies the
@@ -73,7 +76,7 @@ class DecisionStepWrapper(gym.Wrapper):
 #  Training environment factory
 # =====================================================================
 
-def make_training_env(cfg, action_mode, n_envs=4, seed=42, decision_steps=True,
+def make_training_env(cfg, action_mode, n_envs=4, seed=42, decision_steps=False,
                       normalize=True, gamma=0.99):
     """Vectorized, monitored, optionally normalized training environment."""
     from stable_baselines3.common.env_util import make_vec_env
@@ -88,6 +91,66 @@ def make_training_env(cfg, action_mode, n_envs=4, seed=42, decision_steps=True,
     if normalize:
         venv = VecNormalize(venv, norm_obs=True, norm_reward=True, clip_obs=10.0, gamma=gamma)
     return venv
+
+
+def behavior_cloning(model, venv, cfg, action_mode, expert, n_steps=50_000, epochs=10,
+                     batch_size=256, lr=1e-3, dagger_rounds=0):
+    """
+    Pre-train the PPO policy to imitate a rule-based expert (e.g. actuated
+    control) before RL fine-tuning, so PPO starts from a competent policy
+    instead of random switching.
+
+    Round 0: the expert drives `venv` (this also warms up the VecNormalize
+    statistics) and the policy is fitted to (normalized obs, expert action)
+    pairs with a cross-entropy loss.
+    DAgger rounds: the learner drives, every state it visits is labelled with
+    the expert's action, and the policy is refitted on all data. This covers
+    the states plain cloning never sees (after the learner's own mistakes).
+
+    Returns the final accuracy on the collected data.
+    """
+    import torch as th
+
+    spec = TrafficSignalEnv(cfg, action_mode=action_mode)  # constants for the expert policy
+    policy = model.policy
+    opt = th.optim.Adam(policy.parameters(), lr=lr)
+    raw_obs, actions = [], []
+
+    def collect(learner_drives):
+        obs = venv.reset()
+        for _ in range(max(n_steps // venv.num_envs, 1)):
+            raw = venv.get_original_obs() if hasattr(venv, "get_original_obs") else obs
+            labels = np.array([expert(o, spec) for o in raw])
+            raw_obs.append(raw.copy())
+            actions.append(labels)
+            act = model.predict(obs, deterministic=True)[0] if learner_drives else labels
+            obs, _, _, _ = venv.step(act)
+
+    def fit():
+        data = np.concatenate(raw_obs)
+        obs_n = venv.normalize_obs(data) if hasattr(venv, "normalize_obs") else data
+        x = th.as_tensor(obs_n, dtype=th.float32, device=policy.device)
+        y = th.as_tensor(np.concatenate(actions), dtype=th.long, device=policy.device)
+        policy.set_training_mode(True)
+        for _ in range(epochs):
+            perm = th.randperm(len(x))
+            for i in range(0, len(x), batch_size):
+                idx = perm[i:i + batch_size]
+                loss = -policy.get_distribution(x[idx]).log_prob(y[idx]).mean()
+                opt.zero_grad()
+                loss.backward()
+                opt.step()
+        policy.set_training_mode(False)
+        with th.no_grad():
+            pred = policy.get_distribution(x).distribution.probs.argmax(-1)
+        return float((pred == y).float().mean())
+
+    collect(learner_drives=False)
+    acc = fit()
+    for _ in range(dagger_rounds):
+        collect(learner_drives=True)
+        acc = fit()
+    return acc
 
 
 def _vecnormalize_path(model_path):

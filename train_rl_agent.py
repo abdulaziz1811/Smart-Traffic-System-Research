@@ -16,6 +16,9 @@ Key features:
   - reward_type from config ("queue" = total delay, the evaluation metric)
   - Optional curriculum learning (3 traffic levels); baselines are evaluated
     on the SAME traffic level as each stage for a like-for-like plot
+  - Optional imitation warm start (--bc-steps): the policy first imitates
+    the actuated (cyclic) / longest-queue (free) controller, then PPO
+    fine-tunes it with a lower learning rate
   - Seeded for reproducibility; V6 environment (31-dim observation)
 
 Usage:
@@ -32,8 +35,8 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from src.config import bootstrap
 from src.environment import TrafficSignalEnv
-from src.baselines import fixed_time_policy, actuated_policy
-from src.agents import make_training_env, save_agent
+from src.baselines import fixed_time_policy, actuated_policy, longest_queue_policy
+from src.agents import make_training_env, save_agent, behavior_cloning
 
 # -- Academic plot style -----------------------------------------------
 plt.rcParams.update({
@@ -162,7 +165,8 @@ def evaluate_baselines_per_stage(cfg):
 # =====================================================================
 
 def train_agent(name, cfg, action_mode, total_steps, rl_dir, seed=42, use_curriculum=False,
-                n_envs=4, gamma=0.99, verbose=1):
+                n_envs=4, gamma=0.99, bc_steps=0, dagger_rounds=2, finetune_lr=1e-4, clip_range=0.2,
+                decision_steps=False, verbose=1):
     """
     Train a PPO agent (decision steps + VecNormalize + parallel envs).
 
@@ -176,27 +180,40 @@ def train_agent(name, cfg, action_mode, total_steps, rl_dir, seed=42, use_curric
         use_curriculum:  whether to apply curriculum learning
         n_envs:          parallel environments
         gamma:           discount factor per decision
+        bc_steps:        expert decisions for the imitation warm start (0 = off)
+        dagger_rounds:   DAgger rounds after the first imitation fit
+        finetune_lr:     PPO learning rate after the warm start
+        clip_range:      PPO clip range (smaller = stay closer to the warm start)
+        decision_steps:  query the agent only at decision points (see module doc)
         verbose:         curriculum callback verbosity
 
     Returns:
         (model, queue_logger)
     """
-    env = make_training_env(cfg, action_mode, n_envs=n_envs, seed=seed, gamma=gamma)
+    env = make_training_env(cfg, action_mode, n_envs=n_envs, seed=seed, gamma=gamma,
+                            decision_steps=decision_steps)
     model = PPO(
         "MlpPolicy",
         env,
         verbose=0,
-        learning_rate=3e-4,
+        learning_rate=finetune_lr if bc_steps else 3e-4,
         n_steps=1024,
         batch_size=256,
         n_epochs=10,
         gamma=gamma,
         gae_lambda=0.95,
-        ent_coef=0.01,
+        ent_coef=0.0 if bc_steps else 0.01,
+        clip_range=clip_range,
         policy_kwargs=dict(net_arch=[128, 128]),
         device="cpu",
         seed=seed,
     )
+
+    if bc_steps:
+        expert = actuated_policy if action_mode == "cyclic" else longest_queue_policy
+        acc = behavior_cloning(model, env, cfg, action_mode, expert, n_steps=bc_steps,
+                               dagger_rounds=dagger_rounds)
+        print(f"  [Imitation] {action_mode}: policy matches the expert on {acc:.1%} of decisions")
 
     queue_log = QueueLogger()
     callbacks: list[BaseCallback] = [queue_log]
@@ -268,12 +285,19 @@ def generate_plot(baselines, logger_cyclic, logger_free, total_steps, save_path,
 def main():
     ap = argparse.ArgumentParser(description="Train cyclic and free PPO agents")
     ap.add_argument("--config", default="configs/config.yaml")
-    ap.add_argument("--steps", type=int, default=1_000_000, help="training decisions per agent")
+    ap.add_argument("--steps", type=int, default=1_000_000, help="PPO fine-tuning steps per agent")
     ap.add_argument("--seed", type=int, default=None, help="defaults to training.seed in config")
     ap.add_argument("--modes", default="cyclic,free", help="comma-separated: cyclic,free")
     ap.add_argument("--curriculum", action="store_true", help="3-stage traffic curriculum")
     ap.add_argument("--gamma", type=float, default=0.99)
     ap.add_argument("--n-envs", type=int, default=4)
+    ap.add_argument("--bc-steps", type=int, default=50_000,
+                    help="imitation warm start from the rule-based expert (0 = PPO from scratch)")
+    ap.add_argument("--dagger-rounds", type=int, default=2)
+    ap.add_argument("--decision-steps", action="store_true",
+                    help="query the agent only at decision points (biased discounting, see doc)")
+    ap.add_argument("--finetune-lr", type=float, default=1e-4)
+    ap.add_argument("--clip-range", type=float, default=0.2)
     ap.add_argument("--output", default=os.path.join("models", "rl_agents"))
     args = ap.parse_args()
 
@@ -287,9 +311,11 @@ def main():
     total_steps = args.steps
 
     log.info("Training PPO agents: %s", ", ".join(modes))
-    log.info("Decisions per agent: %s | seed: %d | reward: %s | yellow: %ss | curriculum: %s",
+    log.info("Steps per agent: %s | seed: %d | reward: %s | yellow: %ss | curriculum: %s | "
+             "imitation: %s decisions + %d DAgger rounds",
              f"{total_steps:,}", seed, cfg["rl"].get("reward_type", "shaped"),
-             cfg["rl"].get("yellow_time", 0), "on" if args.curriculum else "off")
+             cfg["rl"].get("yellow_time", 0), "on" if args.curriculum else "off",
+             f"{args.bc_steps:,}", args.dagger_rounds if args.bc_steps else 0)
 
     # -- Baseline evaluation (per curriculum stage, for the plot) --
     log.info("Evaluating baselines for every curriculum stage...")
@@ -305,6 +331,8 @@ def main():
         _, loggers[mode] = train_agent(
             f"{mode}_agent", cfg, mode, total_steps, rl_dir, seed=seed,
             use_curriculum=args.curriculum, n_envs=args.n_envs, gamma=args.gamma,
+            bc_steps=args.bc_steps, dagger_rounds=args.dagger_rounds, finetune_lr=args.finetune_lr,
+            clip_range=args.clip_range, decision_steps=args.decision_steps,
         )
         log.info("%s training complete.", mode)
 
