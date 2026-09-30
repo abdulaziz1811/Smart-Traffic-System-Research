@@ -17,7 +17,7 @@ from stable_baselines3 import PPO
 from src.config import load_config
 from src.environment import TrafficSignalEnv
 from src.agents import (DecisionStepWrapper, make_training_env, behavior_cloning,
-                        save_agent, load_agent, agent_is_compatible)
+                        save_agent, load_agent, agent_is_compatible, make_best_model_callback)
 from src.baselines import actuated_policy
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,3 +53,15 @@ def test_imitation_then_save_and_load_round_trip(cfg, tmp_path):
     expected = model.predict(venv.normalize_obs(raw), deterministic=True)[0]
     assert int(agent.predict(raw)[0]) == int(expected)
     venv.close()
+
+
+def test_best_model_callback_keeps_the_best_validation_policy(cfg, tmp_path):
+    venv = make_training_env(cfg, "cyclic", n_envs=1, seed=0)
+    model = PPO("MlpPolicy", venv, n_steps=64, batch_size=64, device="cpu", seed=0)
+    path = str(tmp_path / "cyclic_agent")
+    cb = make_best_model_callback(cfg, "cyclic", path, eval_freq=64, seeds=(1000,), verbose=0)
+    model.learn(192, callback=cb)
+    venv.close()
+    assert len(cb.history) >= 3                      # start + periodic evaluations
+    assert cb.best == min(score for _, score in cb.history)
+    assert os.path.exists(path + ".zip") and os.path.exists(path + "_vecnormalize.pkl")

@@ -2,28 +2,39 @@
 """
 Comparative Training: Fixed Timer vs Cyclic AI vs Free AI
 ==========================================================
-Trains two PPO agents (cyclic-constrained and unconstrained),
-evaluates against a fixed-timer baseline, and produces a
-training progress comparison chart.
+Trains two PPO agents (cyclic-constrained and unconstrained) and produces
+a training progress chart against fixed-timer and actuated baselines.
 
-Key features:
+Recipe (what worked in the experiments, see README section 6):
+  1. Imitation warm start: the policy first imitates the actuated (cyclic)
+     / longest-queue (free) controller, with DAgger rounds so it also
+     learns the states it reaches after its own mistakes.
+     PPO from scratch never reached the actuated baseline.
+  2. PPO fine-tuning (lower learning rate, no entropy bonus) with the
+     "queue" reward (total delay = the evaluation metric), one step per
+     second so discounting is consistent in time.
+  3. VecNormalize (observations + rewards), 4 parallel environments; the
+     statistics are saved next to each model (<name>_vecnormalize.pkl).
+  4. Model selection: the policy is evaluated on validation seeds
+     (1000-1004, disjoint from the test seeds 42-51) at the start and every
+     50k steps; the best one is saved. Longer PPO runs can drift away from
+     the good policy, and this keeps the result at least as good as the
+     warm start.
+
+Other options:
   - Cyclic agent = Discrete(2) extend/next, Free agent = Discrete(4) pick
     any phase
-  - Decision steps: the agent only acts when its action can matter
-    (DecisionStepWrapper skips yellow and min-green seconds)
-  - VecNormalize (observations + rewards) and 4 parallel environments;
-    the statistics are saved next to each model (<name>_vecnormalize.pkl)
-  - reward_type from config ("queue" = total delay, the evaluation metric)
-  - Optional curriculum learning (3 traffic levels); baselines are evaluated
-    on the SAME traffic level as each stage for a like-for-like plot
-  - Optional imitation warm start (--bc-steps): the policy first imitates
-    the actuated (cyclic) / longest-queue (free) controller, then PPO
-    fine-tunes it with a lower learning rate
+  - --decision-steps: only query the agent when its action can matter.
+    Faster, but one step then spans several seconds while PPO discounts
+    per step, which makes switching look too expensive (agents learned to
+    hold green too long), so it is off by default.
+  - --curriculum: 3 traffic levels; baselines are evaluated on the SAME
+    traffic level as each stage for a like-for-like plot
   - Seeded for reproducibility; V6 environment (31-dim observation)
 
 Usage:
-  python train_rl_agent.py
-  python train_rl_agent.py --steps 2000000 --modes free --curriculum
+  python train_rl_agent.py                       # both agents, recipe above
+  python train_rl_agent.py --bc-steps 0          # PPO from scratch (for comparison)
 """
 
 import os
@@ -36,7 +47,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from src.config import bootstrap
 from src.environment import TrafficSignalEnv
 from src.baselines import fixed_time_policy, actuated_policy, longest_queue_policy
-from src.agents import make_training_env, save_agent, behavior_cloning
+from src.agents import make_training_env, behavior_cloning, make_best_model_callback
 
 # -- Academic plot style -----------------------------------------------
 plt.rcParams.update({
@@ -166,7 +177,7 @@ def evaluate_baselines_per_stage(cfg):
 
 def train_agent(name, cfg, action_mode, total_steps, rl_dir, seed=42, use_curriculum=False,
                 n_envs=4, gamma=0.99, bc_steps=0, dagger_rounds=2, finetune_lr=1e-4, clip_range=0.2,
-                decision_steps=False, verbose=1):
+                decision_steps=False, eval_freq=50_000, verbose=1):
     """
     Train a PPO agent (decision steps + VecNormalize + parallel envs).
 
@@ -185,6 +196,7 @@ def train_agent(name, cfg, action_mode, total_steps, rl_dir, seed=42, use_curric
         finetune_lr:     PPO learning rate after the warm start
         clip_range:      PPO clip range (smaller = stay closer to the warm start)
         decision_steps:  query the agent only at decision points (see module doc)
+        eval_freq:       steps between validation evaluations (best model is kept)
         verbose:         curriculum callback verbosity
 
     Returns:
@@ -216,13 +228,17 @@ def train_agent(name, cfg, action_mode, total_steps, rl_dir, seed=42, use_curric
         print(f"  [Imitation] {action_mode}: policy matches the expert on {acc:.1%} of decisions")
 
     queue_log = QueueLogger()
-    callbacks: list[BaseCallback] = [queue_log]
+    best = make_best_model_callback(cfg, action_mode, os.path.join(rl_dir, name),
+                                    eval_freq=eval_freq, verbose=verbose)
+    callbacks: list[BaseCallback] = [queue_log, best]
 
     if use_curriculum:
         callbacks.append(CurriculumCallback(total_steps, verbose=verbose))
 
     model.learn(total_timesteps=total_steps, callback=callbacks)
-    save_agent(model, os.path.join(rl_dir, name))
+    step, score = min(best.history, key=lambda h: h[1])
+    print(f"  [Model selection] {name}: best validation avg queue {score:.3f} at step {step:,} "
+          f"(warm start: {best.history[0][1]:.3f})")
     env.close()
 
     return model, queue_log
@@ -298,6 +314,8 @@ def main():
                     help="query the agent only at decision points (biased discounting, see doc)")
     ap.add_argument("--finetune-lr", type=float, default=1e-4)
     ap.add_argument("--clip-range", type=float, default=0.2)
+    ap.add_argument("--eval-freq", type=int, default=50_000,
+                    help="steps between validation evaluations (best model is kept)")
     ap.add_argument("--output", default=os.path.join("models", "rl_agents"))
     args = ap.parse_args()
 
@@ -332,7 +350,7 @@ def main():
             f"{mode}_agent", cfg, mode, total_steps, rl_dir, seed=seed,
             use_curriculum=args.curriculum, n_envs=args.n_envs, gamma=args.gamma,
             bc_steps=args.bc_steps, dagger_rounds=args.dagger_rounds, finetune_lr=args.finetune_lr,
-            clip_range=args.clip_range, decision_steps=args.decision_steps,
+            clip_range=args.clip_range, decision_steps=args.decision_steps, eval_freq=args.eval_freq,
         )
         log.info("%s training complete.", mode)
 
