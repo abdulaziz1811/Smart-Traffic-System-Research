@@ -17,14 +17,15 @@ dataset:
   split_ratios: { train: 0.70, val: 0.15, test: 0.15 }
   categories: { car: 1, bus: 2, van: 3, others: 4 }
   num_classes: 4
-  id2label: { 1: "Car", 2: "Bus", 3: "Van", 4: "Others" }
+  # NOTE: these are COCO category ids (1-indexed) used in the JSON files.
+  # The model itself uses contiguous 0-indexed labels (0=Car ... 3=Others),
+  # because HF DETR reserves index `num_labels` for "no object".
   default_image_size: [960, 540]
 
 # -- Augmentation -----------------------------------------------------
 augmentation:
-  horizontal_flip: 0.5
-  brightness_contrast: 0.2
-  crop_size: [480, 640]
+  horizontal_flip: 0.5      # flip probability (0 disables)
+  brightness_contrast: 0.2  # ColorJitter strength for brightness & contrast (0 disables)
 
 # -- Model (DETR) -----------------------------------------------------
 model:
@@ -69,8 +70,10 @@ rl:
   max_steps: 3600           # episode length in simulation seconds
   min_green: 5              # minimum green before agent can switch (seconds)
   max_green: 60             # forced switch after this duration (seconds)
+  yellow_time: 3            # lost time (yellow + all-red) after every switch, no lane served
+  action_mode: "cyclic"     # "cyclic" = Discrete(2) extend/next | "free" = pick any phase
   service_rate: 0.6         # vehicles cleared per step per green lane
   arrival_rate_low: 0.02    # min Poisson arrival rate (randomized per episode)
   arrival_rate_high: 0.15   # max Poisson arrival rate
-  switch_penalty: -5.0      # base penalty for unnecessary switches
-  trend_window: 4           # past steps used to compute queue trend vector
+  switch_penalty: -5.0      # NOTE: not used by the current reward (see _compute_reward)
+  trend_window: 4           # snapshots used for the queue trend (avg change per step)

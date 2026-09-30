@@ -6,7 +6,8 @@ Loads a trained PPO agent and runs it through a full episode
 with a real-time dashboard showing queue states, decisions,
 and performance metrics.
 
-Compatible with V4 environment (22-dim observation).
+Compatible with V5 environment (22-dim observation). The action mode
+(cyclic / free) is detected from the model's action space.
 
 Usage:
     python test_rl_agent.py
@@ -22,7 +23,7 @@ import argparse
 import numpy as np
 from stable_baselines3 import PPO
 from src.config import bootstrap
-from src.environment import TrafficSignalEnv
+from src.environment import TrafficSignalEnv, infer_action_mode
 
 
 # -- Observation parsing helpers (V4: 22-dim) --------------------------
@@ -57,7 +58,7 @@ def parse_obs(obs):
 
 # -- Dashboard rendering -----------------------------------------------
 
-def render_dashboard(step, max_steps, parsed, action, reward, total_reward):
+def render_dashboard(step, max_steps, parsed, action_str, reward, total_reward):
     """Print a formatted dashboard to the terminal."""
     q = parsed["queues"]
     t = parsed["trend"]
@@ -102,7 +103,6 @@ def render_dashboard(step, max_steps, parsed, action, reward, total_reward):
     print()
     print("  " + "-" * 38)
 
-    action_str = "EXTEND green" if action == 0 else "SWITCH phase"
     print(f"  Decision:        {action_str}")
     print(f"  Next Density:    {next_d:.3f}")
     print(f"  Step Reward:     {reward:+.2f}")
@@ -124,8 +124,6 @@ def main():
 
     cfg, log, device = bootstrap(args.config)
 
-    # -- Load environment --
-    env = TrafficSignalEnv(cfg)
     max_steps = cfg["rl"]["max_steps"]
 
     # -- Load model --
@@ -136,7 +134,13 @@ def main():
         sys.exit(1)
 
     log.info("Loading agent from: %s", model_path)
-    model = PPO.load(model_path)
+    model = PPO.load(model_path, device="cpu", custom_objects={
+        "learning_rate": 0.0, "lr_schedule": lambda _: 0.0, "clip_range": lambda _: 0.2})
+
+    # -- Load environment in the action mode the agent was trained for --
+    mode = infer_action_mode(model, cfg["rl"]["num_phases"])
+    env = TrafficSignalEnv(cfg, action_mode=mode)
+    log.info("Action mode: %s", mode)
 
     # -- Verify observation space compatibility --
     env_obs_dim = env.observation_space.shape[0] # type: ignore
@@ -166,13 +170,21 @@ def main():
 
         while not (done or truncated):
             action, _ = model.predict(obs, deterministic=True)
+            prev_phase = env.phase
             obs, reward, done, truncated, info = env.step(action)
 
             total_reward += reward
             step += 1
 
+            if env.phase != prev_phase:
+                action_str = f"SWITCH -> {PHASE_NAMES[env.phase]}"
+            elif info["in_clearance"]:
+                action_str = "YELLOW / ALL-RED"
+            else:
+                action_str = "EXTEND green"
+
             parsed = parse_obs(obs)
-            render_dashboard(step, max_steps, parsed, int(action), reward, total_reward)
+            render_dashboard(step, max_steps, parsed, action_str, reward, total_reward)
 
             time.sleep(args.speed)
 

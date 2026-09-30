@@ -6,8 +6,9 @@ Runs: 3 baselines + AI agent × 4 scenarios × N seeds
 Outputs: Tables, CSVs, and plots ready for the paper.
 
 Usage:
-    python scripts/validate_full.py --seeds 10
-    python scripts/validate_full.py --seeds 30 --output paper_results/
+    python validate_full.py --seeds 10
+    python validate_full.py --seeds 30 --output paper_results/
+    python validate_full.py --model models/rl_agents/free_agent
 """
 
 import argparse, os, json, time
@@ -16,30 +17,12 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 
 from src.config import bootstrap
-from src.environment import TrafficSignalEnv
+from src.environment import TrafficSignalEnv, infer_action_mode
+from src.baselines import fixed_time_policy, actuated_policy
 
 # ══════════════════════════════════════════════════════════
 #  BASELINES
 # ══════════════════════════════════════════════════════════
-
-def fixed_timer_policy(obs, env, cycle_length=30):
-    """Fixed-time: switch every `cycle_length` steps regardless of traffic."""
-    timer_normalized = obs[env.n_app + env.n_phase]  # normalized timer
-    timer_actual = timer_normalized * env.max_green
-    return 1 if timer_actual >= cycle_length else 0
-
-def actuated_policy(obs, env):
-    """Actuated: switch when active lanes are nearly empty (greedy)."""
-    queues = obs[:env.n_app]
-    phase = np.argmax(obs[env.n_app : env.n_app + env.n_phase])
-    active_lanes = env.green_map[phase]
-    active_queue = sum(queues[l] for l in active_lanes)
-    timer_normalized = obs[env.n_app + env.n_phase]
-    timer_actual = timer_normalized * env.max_green
-    # Switch if lanes nearly empty AND min green met
-    if active_queue < 0.5 and timer_actual >= env.min_green:
-        return 1
-    return 0
 
 def random_policy(obs, env, rng):
     """Random baseline: coin flip each step."""
@@ -73,13 +56,25 @@ SCENARIOS = {
     },
 }
 
+
+def scenario_reset_options(sc_cfg, seed, n_app=8):
+    """Per-episode reset options. Asymmetric: N/S lanes (0-3) busy, E/W lanes (4-7) light."""
+    if not sc_cfg.get("asymmetric"):
+        return None
+    lo, hi = sc_cfg["arrival_low"], sc_cfg["arrival_high"]
+    mid = (lo + hi) / 2
+    rng = np.random.default_rng(10_000 + seed)
+    half = n_app // 2
+    return {"arrivals": np.concatenate([rng.uniform(mid, hi, half),
+                                        rng.uniform(lo, mid, n_app - half)])}
+
 # ══════════════════════════════════════════════════════════
 #  SINGLE EPISODE RUNNER
 # ══════════════════════════════════════════════════════════
 
-def run_episode(env, policy_fn, seed, max_steps=3600):
+def run_episode(env, policy_fn, seed, max_steps=3600, options=None):
     """Run one full episode and collect metrics."""
-    obs, _ = env.reset(seed=seed)
+    obs, _ = env.reset(seed=seed, options=options)
     
     total_reward = 0.0
     total_served = 0.0
@@ -95,10 +90,6 @@ def run_episode(env, policy_fn, seed, max_steps=3600):
         queue_history.append(info["avg_queue"])
         total_served = info["served"]
         switches = info["switches"]
-        
-        # Track cumulative wait from obs
-        waits = obs[env.n_app + env.n_phase + 1 + 1:]  # after queues+phase+timer+density
-        # Note: waits are not in obs for V3, use info or queues
         
         if terminated or truncated:
             break
@@ -117,35 +108,54 @@ def run_episode(env, policy_fn, seed, max_steps=3600):
 #  MAIN VALIDATION
 # ══════════════════════════════════════════════════════════
 
-def run_validation(cfg, n_seeds=10, output_dir="outputs/validation"):
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Try loading trained agent
-    ai_model = None
+DEFAULT_MODELS = [
+    "models/rl_agents/free_agent",
+    "models/rl_agents/cyclic_agent",
+    "models/rl_agents/final_ppo_agent",
+]
+
+
+def load_ai_agent(cfg, model_path=None):
+    """Load the RL agent (explicit path or first default found). Returns (model, mode)."""
     try:
         from stable_baselines3 import PPO
-        for path in ["models/rl_agents/final_ppo_agent", 
-                      "models/rl_agents/final_ppo_agent_v2",
-                      "models/rl_agents/final_ppo_agent_v3"]:
-            if os.path.exists(path + ".zip"):
-                ai_model = PPO.load(path)
-                print(f"✅ Loaded AI agent from: {path}")
-                break
-        if ai_model is None:
-            print("⚠️  No trained RL agent found! Running baselines only.")
     except ImportError:
         print("⚠️  stable-baselines3 not installed. Running baselines only.")
+        return None, None
+
+    for path in ([model_path] if model_path else DEFAULT_MODELS):
+        if not os.path.exists(path + ".zip"):
+            continue
+        model = PPO.load(path, device="cpu", custom_objects={
+            "learning_rate": 0.0, "lr_schedule": lambda _: 0.0, "clip_range": lambda _: 0.2})
+        mode = infer_action_mode(model, cfg["rl"]["num_phases"])
+        env_dim = TrafficSignalEnv(cfg, action_mode=mode).observation_space.shape[0] # type: ignore
+        if model.observation_space.shape[0] != env_dim: # type: ignore
+            print(f"⚠️  {path}: obs mismatch (model={model.observation_space.shape[0]}, " # type: ignore
+                  f"env={env_dim}). Retrain with the current environment.")
+            continue
+        print(f"✅ Loaded AI agent from: {path} (action mode: {mode})")
+        return model, mode
+
+    print("⚠️  No compatible trained RL agent found! Running baselines only.")
+    return None, None
+
+
+def run_validation(cfg, n_seeds=10, output_dir="outputs/validation", model_path=None):
+    os.makedirs(output_dir, exist_ok=True)
+    
+    ai_model, ai_mode = load_ai_agent(cfg, model_path)
     
     seeds = list(range(42, 42 + n_seeds))
     
-    # Define policies
+    # Define policies: name -> (fn(obs, env, rng), action_mode)
     policies = {
-        "Fixed_30s": lambda obs, env=None, rng=None: fixed_timer_policy(obs, env, 30),
-        "Actuated": lambda obs, env=None, rng=None: actuated_policy(obs, env),
-        "Random": lambda obs, env=None, rng=None: random_policy(obs, env, rng),
+        "Fixed_30s": (lambda obs, env=None, rng=None: fixed_time_policy(obs, env, 30), "cyclic"),
+        "Actuated": (lambda obs, env=None, rng=None: actuated_policy(obs, env), "cyclic"),
+        "Random": (lambda obs, env=None, rng=None: random_policy(obs, env, rng), "cyclic"),
     }
     if ai_model:
-        policies["AI_Agent"] = lambda obs, env=None, rng=None: int(ai_model.predict(obs, deterministic=True)[0]) # type: ignore
+        policies["AI_Agent"] = (lambda obs, env=None, rng=None: int(ai_model.predict(obs, deterministic=True)[0]), ai_mode) # type: ignore
     
     # ── Run all combinations ──
     all_results = {}  # {scenario: {policy: [metrics_per_seed]}}
@@ -157,14 +167,14 @@ def run_validation(cfg, n_seeds=10, output_dir="outputs/validation"):
         
         all_results[sc_name] = {}
         
-        for pol_name, pol_fn in policies.items():
+        for pol_name, (pol_fn, pol_mode) in policies.items():
             print(f"  🔄 Running {pol_name} ({n_seeds} seeds)...", end=" ", flush=True)
             t0 = time.time()
             
             seed_results = []
             for seed in seeds:
                 # Create fresh env with scenario-specific arrivals
-                env = TrafficSignalEnv(cfg)
+                env = TrafficSignalEnv(cfg, action_mode=pol_mode)
                 env.arr_low = sc_cfg["arrival_low"] # type: ignore
                 env.arr_high = sc_cfg["arrival_high"] # type: ignore
                 
@@ -174,7 +184,8 @@ def run_validation(cfg, n_seeds=10, output_dir="outputs/validation"):
                 def wrapped_policy(obs, _env=env, _rng=rng, _fn=pol_fn):
                     return _fn(obs, env=_env, rng=_rng)
                 
-                metrics = run_episode(env, wrapped_policy, seed)
+                metrics = run_episode(env, wrapped_policy, seed,
+                                      options=scenario_reset_options(sc_cfg, seed, env.n_app))
                 seed_results.append(metrics)
             
             all_results[sc_name][pol_name] = seed_results # type: ignore
@@ -352,6 +363,7 @@ def main():
     ap.add_argument("--config", default="configs/config.yaml")
     ap.add_argument("--seeds", type=int, default=10, help="Number of random seeds")
     ap.add_argument("--output", default="outputs/validation")
+    ap.add_argument("--model", default=None, help="RL agent path without .zip")
     args = ap.parse_args()
     
     cfg, log, device = bootstrap(args.config)
@@ -362,7 +374,8 @@ def main():
     print(f"   Output: {args.output}")
     print()
     
-    results = run_validation(cfg, n_seeds=args.seeds, output_dir=args.output)
+    results = run_validation(cfg, n_seeds=args.seeds, output_dir=args.output,
+                             model_path=args.model)
     
     print(f"\n✅ Validation complete! Results in {args.output}/")
 

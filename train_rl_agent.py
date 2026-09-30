@@ -8,21 +8,29 @@ training progress comparison chart.
 
 Key features:
   - Curriculum learning: traffic difficulty increases in 3 stages
-  - Correct fixed-timer baseline (returns 0/1, not phase index)
-  - Correct logging key (avg_queue from environment info dict)
-  - Compatible with V4 environment (22-dim observation with trend)
+  - Cyclic agent = Discrete(2) extend/next, Free agent = Discrete(4) pick
+    any phase (previously both agents used the identical cyclic env)
+  - Baselines (fixed timer + actuated) are evaluated on the SAME traffic
+    level as each curriculum stage, so the training curve is compared
+    against a like-for-like reference
+  - Seeded PPO for reproducibility
+  - Compatible with V5 environment (22-dim observation, yellow lost time)
+
+Usage:
+  python train_rl_agent.py
+  python train_rl_agent.py --steps 1000000 --seed 42
 """
 
 import os
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
-import gymnasium as gym
-from gymnasium import spaces
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 
 from src.config import bootstrap
 from src.environment import TrafficSignalEnv
+from src.baselines import fixed_time_policy, actuated_policy
 
 # -- Academic plot style -----------------------------------------------
 plt.rcParams.update({
@@ -37,51 +45,6 @@ plt.rcParams.update({
     "lines.linewidth": 2.5,
     "grid.alpha": 0.6,
 })
-
-
-# =====================================================================
-#  Fixed Timer Baseline
-# =====================================================================
-
-class FixedTimeController:
-    """
-    Traditional fixed-cycle traffic signal controller.
-    Switches to the next phase every `green_duration` steps.
-    Returns 0 (extend) or 1 (switch) to match env.action_space.
-    """
-
-    def __init__(self, green_duration=30):
-        self.green_duration = green_duration
-        self.time_in_phase = 0
-
-    def get_action(self):
-        self.time_in_phase += 1
-        if self.time_in_phase >= self.green_duration:
-            self.time_in_phase = 0
-            return 1  # switch to next phase
-        return 0      # extend current phase
-
-
-# =====================================================================
-#  Cyclic Wrapper
-# =====================================================================
-
-class CyclicTrafficEnv(gym.Wrapper):
-    """
-    Conceptual wrapper marking the agent as cycle-constrained.
-
-    The base TrafficSignalEnv already enforces sequential phase
-    order (0 -> 1 -> 2 -> 3 -> 0), so this wrapper passes actions
-    through without modification. It exists to make the constraint
-    explicit in the training code and paper description.
-    """
-
-    def __init__(self, env):
-        super().__init__(env) # type: ignore
-        self.action_space = spaces.Discrete(2)
-
-    def step(self, action):
-        return self.env.step(action)
 
 
 # =====================================================================
@@ -168,29 +131,37 @@ class CurriculumCallback(BaseCallback):
 #  Baseline Evaluation
 # =====================================================================
 
-def evaluate_baseline(cfg, steps=10000):
-    """Run the fixed-timer controller and return average queue length."""
-    env = TrafficSignalEnv(cfg)
-    ctrl = FixedTimeController(green_duration=30)
-    obs, _ = env.reset()
+def evaluate_baseline(cfg, policy, arr_low, arr_high, seeds=range(5), steps=3600):
+    """Run a rule-based controller at the given traffic level; return average queue."""
     queues = []
+    for seed in seeds:
+        env = TrafficSignalEnv(cfg, action_mode="cyclic")
+        env.arr_low, env.arr_high = arr_low, arr_high
+        obs, _ = env.reset(seed=int(seed))
+        for _ in range(steps):
+            obs, _, done, truncated, info = env.step(policy(obs, env))
+            queues.append(info["avg_queue"])
+            if done or truncated:
+                break
+    return float(np.mean(queues))
 
-    for _ in range(steps):
-        action = ctrl.get_action()
-        obs, _, done, truncated, info = env.step(action)
-        queues.append(info["avg_queue"])
-        if done or truncated:
-            obs, _ = env.reset()
-            ctrl.time_in_phase = 0
 
-    return float(np.mean(queues)) if queues else 25.0
+def evaluate_baselines_per_stage(cfg):
+    """Baseline average queue for every curriculum stage (like-for-like reference)."""
+    ref = {"Fixed Timer 30s": [], "Actuated": []}
+    for st in CurriculumCallback.STAGES:
+        ref["Fixed Timer 30s"].append(evaluate_baseline(
+            cfg, lambda o, e: fixed_time_policy(o, e, green=30), st["arr_low"], st["arr_high"]))
+        ref["Actuated"].append(evaluate_baseline(
+            cfg, actuated_policy, st["arr_low"], st["arr_high"]))
+    return ref
 
 
 # =====================================================================
 #  Training Pipeline
 # =====================================================================
 
-def train_agent(name, env, total_steps, rl_dir, use_curriculum=True, verbose=1):
+def train_agent(name, env, total_steps, rl_dir, seed=42, use_curriculum=True, verbose=1):
     """
     Train a PPO agent with optional curriculum learning.
 
@@ -199,6 +170,7 @@ def train_agent(name, env, total_steps, rl_dir, use_curriculum=True, verbose=1):
         env:             gymnasium environment instance
         total_steps:     total training timesteps
         rl_dir:          directory to save the trained model
+        seed:            random seed (PPO weights, sampling and env)
         use_curriculum:  whether to apply curriculum learning
         verbose:         curriculum callback verbosity
 
@@ -213,6 +185,7 @@ def train_agent(name, env, total_steps, rl_dir, use_curriculum=True, verbose=1):
         n_steps=2048,
         batch_size=64,
         device="cpu",
+        seed=seed,
     )
 
     queue_log = QueueLogger()
@@ -232,48 +205,43 @@ def train_agent(name, env, total_steps, rl_dir, use_curriculum=True, verbose=1):
 #  Plot Generation
 # =====================================================================
 
-def generate_plot(avg_fixed, logger_cyclic, logger_free, total_steps, save_path):
-    """Generate training progress comparison chart with curriculum markers."""
+def generate_plot(baselines, logger_cyclic, logger_free, total_steps, save_path):
+    """Generate training progress comparison chart with per-stage baselines."""
     plt.figure(figsize=(12, 7))
 
-    steps_axis = np.linspace(0, total_steps, max(len(logger_free.history), 1))
+    n_stages = len(CurriculumCallback.STAGES)
+    bounds = [i * total_steps / n_stages for i in range(n_stages + 1)]
+    ref_style = {"Fixed Timer 30s": ("#e74c3c", "--"), "Actuated": ("#8e44ad", "-.")}
 
-    # Fixed timer reference line
-    plt.axhline(
-        y=avg_fixed, color="#e74c3c", linestyle="--", linewidth=2.5,
-        label=f"Fixed Timer 30s (Avg: {avg_fixed:.1f})",
-    )
+    # Baselines evaluated on the same traffic level as each curriculum stage
+    for name, values in baselines.items():
+        color, ls = ref_style.get(name, ("#555", "--"))
+        for i, v in enumerate(values):
+            plt.hlines(v, bounds[i], bounds[i + 1], colors=color, linestyles=ls,
+                       linewidth=2.5, label=name if i == 0 else None)
 
-    # Cyclic AI training curve
-    n = min(len(steps_axis), len(logger_cyclic.history))
-    if n > 0:
-        plt.plot(
-            steps_axis[:n], logger_cyclic.history[:n],
-            color="#e67e22", linewidth=2, label="Cyclic AI (Fixed Order)",
-        )
-
-    # Free AI training curve
-    n = min(len(steps_axis), len(logger_free.history))
-    if n > 0:
-        plt.plot(
-            steps_axis[:n], logger_free.history[:n],
-            color="#2ecc71", linewidth=2.5, label="Free AI (Fully Adaptive)",
-        )
+    # Agent training curves
+    for logger, color, label, lw in [
+        (logger_cyclic, "#e67e22", "Cyclic AI (extend / next phase)", 2),
+        (logger_free, "#2ecc71", "Free AI (pick any phase)", 2.5),
+    ]:
+        if logger.history:
+            x = np.linspace(0, total_steps, len(logger.history))
+            plt.plot(x, logger.history, color=color, linewidth=lw, label=label)
 
     # Mark curriculum stage transitions
-    stage_labels = ["Stage 2: Medium", "Stage 3: Heavy"]
-    for i, (frac, label) in enumerate(zip([0.33, 0.66], stage_labels)):
-        x = frac * total_steps
+    for i, st in enumerate(CurriculumCallback.STAGES[1:], start=1):
+        x = bounds[i]
         plt.axvline(x=x, color="gray", linestyle=":", alpha=0.5)
         plt.text(
             x + total_steps * 0.005, plt.ylim()[1] * 0.92,
-            label, fontsize=9, color="gray", fontstyle="italic",
+            f"Stage {i + 1}: {st['label']}", fontsize=9, color="gray", fontstyle="italic",
         )
 
     plt.title("Training Progress: Traffic Control Strategies", pad=15, fontweight="bold")
     plt.xlabel("Training Steps")
     plt.ylabel("Average Queue Length (Vehicles)")
-    plt.legend(loc="upper right", frameon=True, framealpha=0.9, shadow=True)
+    plt.legend(loc="upper left", frameon=True, framealpha=0.9, shadow=True)
     plt.grid(True, linestyle=":", alpha=0.7)
     plt.savefig(save_path, bbox_inches="tight")
     plt.close()
@@ -284,44 +252,55 @@ def generate_plot(avg_fixed, logger_cyclic, logger_free, total_steps, save_path)
 # =====================================================================
 
 def main():
-    cfg, log, device = bootstrap("configs/config.yaml")
+    ap = argparse.ArgumentParser(description="Train cyclic and free PPO agents")
+    ap.add_argument("--config", default="configs/config.yaml")
+    ap.add_argument("--steps", type=int, default=500_000, help="training steps per agent")
+    ap.add_argument("--seed", type=int, default=None, help="defaults to training.seed in config")
+    ap.add_argument("--output", default=os.path.join("models", "rl_agents"))
+    args = ap.parse_args()
 
-    rl_dir = os.path.join("models", "rl_agents")
+    cfg, log, device = bootstrap(args.config)
+    seed = args.seed if args.seed is not None else cfg["training"]["seed"]
+
+    rl_dir = args.output
     os.makedirs(rl_dir, exist_ok=True)
 
-    total_steps = 500_000
+    total_steps = args.steps
 
     log.info("Starting comparative study: Fixed Timer vs Cyclic AI vs Free AI")
-    log.info("Training steps per agent: %s", f"{total_steps:,}")
+    log.info("Training steps per agent: %s | seed: %d | yellow_time: %s s",
+             f"{total_steps:,}", seed, cfg["rl"].get("yellow_time", 0))
     log.info("Curriculum learning: enabled (3 stages)")
 
-    # -- Phase 1: Baseline evaluation --
-    log.info("Evaluating fixed-timer baseline (30s cycle)...")
-    avg_fixed = evaluate_baseline(cfg, steps=10000)
-    log.info("Fixed timer average queue: %.2f", avg_fixed)
+    # -- Phase 1: Baseline evaluation (per curriculum stage) --
+    log.info("Evaluating baselines for every curriculum stage...")
+    baselines = evaluate_baselines_per_stage(cfg)
+    for name, values in baselines.items():
+        log.info("  %-16s avg queue per stage: %s", name, ", ".join(f"{v:.2f}" for v in values))
 
     # -- Phase 2: Train Cyclic AI (with curriculum) --
-    log.info("Training Cyclic AI (constrained, with curriculum)...")
-    cyclic_env = CyclicTrafficEnv(TrafficSignalEnv(cfg))
+    log.info("Training Cyclic AI (Discrete(2): extend / next phase)...")
+    cyclic_env = TrafficSignalEnv(cfg, action_mode="cyclic")
     _, logger_cyclic = train_agent(
-        "cyclic_agent", cyclic_env, total_steps, rl_dir, use_curriculum=True
+        "cyclic_agent", cyclic_env, total_steps, rl_dir, seed=seed, use_curriculum=True
     )
     log.info("Cyclic AI training complete.")
 
     # -- Phase 3: Train Free AI (with curriculum) --
-    log.info("Training Free AI (unconstrained, with curriculum)...")
-    free_env = TrafficSignalEnv(cfg)
+    log.info("Training Free AI (Discrete(4): pick any phase)...")
+    free_env = TrafficSignalEnv(cfg, action_mode="free")
     _, logger_free = train_agent(
-        "free_agent", free_env, total_steps, rl_dir, use_curriculum=True
+        "free_agent", free_env, total_steps, rl_dir, seed=seed, use_curriculum=True
     )
     log.info("Free AI training complete.")
 
     # -- Phase 4: Generate comparison plot --
     plot_path = os.path.join(rl_dir, "Training_Comparison.png")
-    generate_plot(avg_fixed, logger_cyclic, logger_free, total_steps, plot_path)
+    generate_plot(baselines, logger_cyclic, logger_free, total_steps, plot_path)
     log.info("Comparison plot saved: %s", plot_path)
 
     log.info("All training complete. Models saved to: %s", rl_dir)
+    log.info("Next step: python compare_agents.py --agents-dir %s", rl_dir)
 
 
 if __name__ == "__main__":
