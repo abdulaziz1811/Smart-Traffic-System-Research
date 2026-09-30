@@ -9,8 +9,8 @@ Runs full evaluation and outputs:
   - Saves everything to JSON + prints LaTeX-ready table
 
 Usage:
-    python scripts/validate_detection.py
-    python scripts/validate_detection.py --threshold 0.3
+    python validate_detection.py
+    python validate_detection.py --split val
 """
 
 import argparse, os, sys, time, json
@@ -18,10 +18,18 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.config import bootstrap
 from src.dataset import get_processor, get_dataloaders
 from src.detector import load_best_or_final
+
+
+def _sync(device):
+    """Wait for queued GPU work so the timer measures real latency."""
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    elif device.type == "mps":
+        torch.mps.synchronize()
 
 
 @torch.no_grad()
@@ -42,18 +50,20 @@ def evaluate_full(model, processor, loader, device):
         pv = batch["pixel_values"].to(device)
         pm = batch["pixel_mask"].to(device)
 
+        _sync(device)
         t0 = time.perf_counter()
         out = model(pixel_values=pv, pixel_mask=pm)
+        _sync(device)
+        # Model forward only (excludes image decoding, resizing and post-processing)
         latencies.append((time.perf_counter() - t0) / pv.shape[0])
 
-        for i, lab in enumerate(batch["labels"]):
+        # Post-process the whole batch (expects the model output object, not a dict)
+        ts = torch.stack([lab["orig_size"] for lab in batch["labels"]]).to(device)
+        batch_res = processor.post_process_object_detection(out, target_sizes=ts, threshold=0.01)
+
+        for lab, res in zip(batch["labels"], batch_res):
             iid += 1
             orig = lab["orig_size"]
-            ts = torch.tensor([orig.tolist()]).to(device)
-            res = processor.post_process_object_detection(
-                {"logits": out.logits[i:i+1], "pred_boxes": out.pred_boxes[i:i+1]},
-                target_sizes=ts, threshold=0.01
-            )[0]
 
             for sc, lb, bx in zip(res["scores"], res["labels"], res["boxes"]):
                 x1, y1, x2, y2 = bx.tolist()
@@ -111,7 +121,7 @@ def evaluate_full(model, processor, loader, device):
 
     # ── Per-Class AP ──
     results["per_class"] = {}
-    cat_names = {c["id"]: c.get("name", f"cls_{c['id']}") for c in gt_coco.dataset["categories"]}
+    cat_names = {int(k): v for k, v in model.config.id2label.items()}
     # Count instances per class
     class_counts = {}
     for g in gts:
@@ -136,6 +146,7 @@ def evaluate_full(model, processor, loader, device):
 
     # ── Speed ──
     results["speed"] = {
+        "note": "model forward pass only, batched; end-to-end FPS is lower",
         "avg_latency_ms": np.mean(latencies) * 1000,
         "std_latency_ms": np.std(latencies) * 1000,
         "fps": 1.0 / np.mean(latencies) if latencies else 0,
@@ -175,7 +186,7 @@ def print_tables(results):
     s = results["speed"]
     print(f"  Device:      {s['device']}")
     print(f"  Latency:     {s['avg_latency_ms']:.1f} ± {s['std_latency_ms']:.1f} ms")
-    print(f"  FPS:         {s['fps']:.1f}")
+    print(f"  FPS:         {s['fps']:.1f}  (forward pass only)")
     print(f"  Images:      {s['total_images']}")
 
     # LaTeX table
@@ -210,13 +221,9 @@ def main():
     cfg, log, device = bootstrap(args.config)
     model = load_best_or_final(cfg, device)
     processor = get_processor(cfg)
-    _, _, test_ld = get_dataloaders(cfg, processor)
-
-    if args.split == "val":
-        _, val_ld, _ = get_dataloaders(cfg, processor)
-        loader = val_ld
-    else:
-        loader = test_ld
+    # Ground truth is mapped into the loaded model's own label space
+    _, val_ld, test_ld = get_dataloaders(cfg, processor, label2id=model.config.label2id)
+    loader = val_ld if args.split == "val" else test_ld
 
     if loader is None:
         print(f"ERROR: No {args.split}.json found in annotations dir!")

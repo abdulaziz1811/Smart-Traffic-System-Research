@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run detection on images. Compatible with models/weights/final_model."""
 import argparse, sys, os, random
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from PIL import Image
 from tqdm import tqdm
 from src.config import bootstrap
