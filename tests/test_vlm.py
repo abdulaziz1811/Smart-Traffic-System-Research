@@ -126,3 +126,36 @@ def test_template_analysis():
     res = template_analysis({"intersection": "Main_1", "anomalous_lanes": [4], "queues": [0, 0, 0, 0, 12, 0, 0, 0]})
     assert res.incident_present and res.incident_approach == "east"
     assert "E straight" in res.summary_en and "12" in res.summary_en
+
+
+def test_reporter_keeps_report_when_vlm_turns_out_unavailable(monkeypatch):
+    """First request fails (no credentials) -> its template result must still be reported."""
+    from src.config import load_config
+    from src.environment import TrafficSignalEnv
+    from src.intersection import LocalIntersectionAgent
+    from src.supervisor import CentralSupervisor
+    from src.vlm_reporter import VLMReporter
+
+    class NoCredentialsClient:
+        beta = SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: (_ for _ in ()).throw(
+            TypeError("Could not resolve authentication method."))))
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg = load_config(os.path.join(root, "configs", "config.yaml"))
+    env = TrafficSignalEnv(cfg)
+    env.reset(seed=0)
+    agent = LocalIntersectionAgent("Main_Intersection_1", env, None)
+    sup = CentralSupervisor()
+    sup.register_intersection(agent)
+    rep = VLMReporter(VLMAnalyzer(cfg, client=NoCredentialsClient()))
+
+    agent.locked_queues_duration[4] = 99          # anomaly on lane 4
+    env.queues[4] = 12
+    reports = rep.check_and_report(sup)           # submitted to the worker
+    deadline = time.time() + 3
+    while not reports and time.time() < deadline:
+        time.sleep(0.05)
+        reports = rep.check_and_report(sup)
+    rep.close()
+    assert reports and reports[0]["source"] == "template" and reports[0]["lanes"] == [4]
+    assert rep.mode == "template"

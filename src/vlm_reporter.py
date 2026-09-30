@@ -61,16 +61,16 @@ class VLMReporter:
                 for lane in anomalous_lanes:
                     agent.locked_queues_duration[lane] = -50
 
-        results = []
+        # Finished VLM analyses (the worker falls back to the template itself
+        # when a request fails, so nothing submitted is ever lost)
+        results = self.worker.poll() if self.worker is not None else []
         if self.worker is None or not self.analyzer.available:
             # Offline: template reports, immediately
-            results = [template_analysis(ctx) for _, ctx in self._pending]
+            results += [template_analysis(ctx) for _, ctx in self._pending]
             self._pending = []
-        else:
-            results = self.worker.poll()
-            if self._pending and not self.worker.busy:
-                frame, ctx = self._pending.pop(0)
-                self.worker.submit(frame, ctx)
+        elif self._pending and not self.worker.busy:
+            frame, ctx = self._pending.pop(0)
+            self.worker.submit(frame, ctx)
 
         reports = []
         for a in results:
