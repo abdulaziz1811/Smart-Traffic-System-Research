@@ -31,6 +31,16 @@ except ImportError:
 
 from src.environment import TrafficSignalEnv, infer_action_mode
 
+
+def env_class(sim="fluid"):
+    """TrafficSignalEnv for the fast queue model, SumoTrafficSignalEnv for SUMO."""
+    if sim == "sumo":
+        from src.sumo_env import SumoTrafficSignalEnv
+        return SumoTrafficSignalEnv
+    if sim != "fluid":
+        raise ValueError(f"sim must be 'fluid' or 'sumo', got {sim!r}")
+    return TrafficSignalEnv
+
 # Pickled SB3 schedules break across Python versions; they are not needed
 # for inference, so replace them when loading.
 _CUSTOM_OBJECTS = {
@@ -77,13 +87,15 @@ class DecisionStepWrapper(gym.Wrapper):
 # =====================================================================
 
 def make_training_env(cfg, action_mode, n_envs=4, seed=42, decision_steps=False,
-                      normalize=True, gamma=0.99):
+                      normalize=True, gamma=0.99, sim="fluid"):
     """Vectorized, monitored, optionally normalized training environment."""
     from stable_baselines3.common.env_util import make_vec_env
     from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv, VecNormalize
 
+    cls = env_class(sim)
+
     def make():
-        env = TrafficSignalEnv(cfg, action_mode=action_mode)
+        env = cls(cfg, action_mode=action_mode)
         return DecisionStepWrapper(env) if decision_steps else env
 
     vec_cls = SubprocVecEnv if n_envs > 1 else DummyVecEnv
@@ -153,12 +165,14 @@ def behavior_cloning(model, venv, cfg, action_mode, expert, n_steps=50_000, epoc
     return acc
 
 
-def evaluate_policy_queue(model, venv, cfg, action_mode, seeds, steps=3600):
-    """Average queue of the (deterministic) policy on the given seeds, fluid model."""
-    queues = []
+def evaluate_policy_queue(model, venv, cfg, action_mode, seeds, steps=3600, sim="fluid",
+                          per_seed=False):
+    """Average queue of the (deterministic) policy on the given seeds."""
+    results = []
     for seed in seeds:
-        env = TrafficSignalEnv(cfg, action_mode=action_mode)
+        env = env_class(sim)(cfg, action_mode=action_mode)
         obs, _ = env.reset(seed=int(seed))
+        queues = []
         for _ in range(steps):
             obs_n = venv.normalize_obs(obs) if hasattr(venv, "normalize_obs") else obs
             action = model.predict(obs_n, deterministic=True)[0]
@@ -166,19 +180,47 @@ def evaluate_policy_queue(model, venv, cfg, action_mode, seeds, steps=3600):
             queues.append(info["avg_queue"])
             if term or trunc:
                 break
-    return float(np.mean(queues))
+        if hasattr(env, "close"):
+            env.close()
+        results.append(float(np.mean(queues)))
+    return results if per_seed else float(np.mean(results))
 
 
-def make_best_model_callback(cfg, action_mode, path, eval_freq=50_000, seeds=(1000, 1001, 1002, 1003, 1004),
-                             verbose=1):
+def _reference_queues(cfg, seeds, steps=3600, sim="fluid"):
+    """Actuated-control average queue per seed (the yardstick for model selection)."""
+    from src.baselines import actuated_policy
+    out = []
+    for seed in seeds:
+        env = env_class(sim)(cfg, action_mode="cyclic")
+        obs, _ = env.reset(seed=int(seed))
+        queues = []
+        for _ in range(steps):
+            obs, _, term, trunc, info = env.step(actuated_policy(obs, env))
+            queues.append(info["avg_queue"])
+            if term or trunc:
+                break
+        if hasattr(env, "close"):
+            env.close()
+        out.append(float(np.mean(queues)))
+    return out
+
+
+def make_best_model_callback(cfg, action_mode, path, eval_freq=50_000,
+                             seeds=tuple(range(1000, 1008)), verbose=1, sim="fluid"):
     """
     Keep the best policy seen during training (early stopping by model
     selection). Evaluated on validation seeds that are disjoint from the
     test seeds (42-51) used by compare_agents.py / validate_full.py, at the
     start (the imitation warm start) and every `eval_freq` steps; the best
     one is saved to `path` with its normalization statistics.
+
+    Validation uses the training demand (e.g. "mixed" scenarios). The score
+    is the mean over seeds of agent queue / actuated queue on the same
+    traffic, so a rush-hour seed does not outweigh all the others.
     """
     from stable_baselines3.common.callbacks import BaseCallback
+
+    reference = np.maximum(np.array(_reference_queues(cfg, seeds, sim=sim)), 1e-3)
 
     class BestModelCallback(BaseCallback):
         def __init__(self):
@@ -188,13 +230,15 @@ def make_best_model_callback(cfg, action_mode, path, eval_freq=50_000, seeds=(10
             self._last = 0
 
         def _evaluate(self):
-            score = evaluate_policy_queue(self.model, self.training_env, cfg, action_mode, seeds)
+            q = np.array(evaluate_policy_queue(self.model, self.training_env, cfg, action_mode,
+                                               seeds, sim=sim, per_seed=True))
+            score = float(np.mean(q / reference))
             self.history.append((self.num_timesteps, score))
             if score < self.best:
                 self.best = score
                 save_agent(self.model, path)
             if self.verbose:
-                print(f"  [Validation] step {self.num_timesteps:>9,}: avg queue {score:.3f} "
+                print(f"  [Validation] step {self.num_timesteps:>9,}: queue vs actuated {score:.3f} "
                       f"(best {self.best:.3f})", flush=True)
 
         def _on_training_start(self):

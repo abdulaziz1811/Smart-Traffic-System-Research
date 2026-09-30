@@ -15,9 +15,13 @@ Recipe (what worked in the experiments, see README section 6):
      second so discounting is consistent in time.
   3. VecNormalize (observations + rewards), 4 parallel environments; the
      statistics are saved next to each model (<name>_vecnormalize.pkl).
-  4. Model selection: the policy is evaluated on validation seeds
-     (1000-1004, disjoint from the test seeds 42-51) at the start and every
-     50k steps; the best one is saved. Longer PPO runs can drift away from
+  4. Mixed demand (--demand mixed, default): every training episode draws a
+     scenario (low / medium / rush hour / asymmetric main road). Agents
+     trained on medium traffic only collapsed at rush hour.
+  5. Model selection: the policy is evaluated on validation seeds
+     (1000-1007, disjoint from the test seeds 42-51) at the start and every
+     50k steps, scored as queue relative to actuated control on the same
+     traffic; the best one is saved. Longer PPO runs can drift away from
      the good policy, and this keeps the result at least as good as the
      warm start.
 
@@ -35,9 +39,11 @@ Other options:
 Usage:
   python train_rl_agent.py                       # both agents, recipe above
   python train_rl_agent.py --bc-steps 0          # PPO from scratch (for comparison)
+  python train_rl_agent.py --sim sumo --output models/rl_agents_sumo   # train in SUMO
 """
 
 import os
+import copy
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
@@ -177,7 +183,7 @@ def evaluate_baselines_per_stage(cfg):
 
 def train_agent(name, cfg, action_mode, total_steps, rl_dir, seed=42, use_curriculum=False,
                 n_envs=4, gamma=0.99, bc_steps=0, dagger_rounds=2, finetune_lr=1e-4, clip_range=0.2,
-                decision_steps=False, eval_freq=50_000, verbose=1):
+                decision_steps=False, eval_freq=50_000, sim="fluid", verbose=1):
     """
     Train a PPO agent (decision steps + VecNormalize + parallel envs).
 
@@ -197,13 +203,14 @@ def train_agent(name, cfg, action_mode, total_steps, rl_dir, seed=42, use_curric
         clip_range:      PPO clip range (smaller = stay closer to the warm start)
         decision_steps:  query the agent only at decision points (see module doc)
         eval_freq:       steps between validation evaluations (best model is kept)
+        sim:             "fluid" (fast queue model) or "sumo" (train and validate in SUMO)
         verbose:         curriculum callback verbosity
 
     Returns:
         (model, queue_logger)
     """
     env = make_training_env(cfg, action_mode, n_envs=n_envs, seed=seed, gamma=gamma,
-                            decision_steps=decision_steps)
+                            decision_steps=decision_steps, sim=sim)
     model = PPO(
         "MlpPolicy",
         env,
@@ -229,7 +236,7 @@ def train_agent(name, cfg, action_mode, total_steps, rl_dir, seed=42, use_curric
 
     queue_log = QueueLogger()
     best = make_best_model_callback(cfg, action_mode, os.path.join(rl_dir, name),
-                                    eval_freq=eval_freq, verbose=verbose)
+                                    eval_freq=eval_freq, verbose=verbose, sim=sim)
     callbacks: list[BaseCallback] = [queue_log, best]
 
     if use_curriculum:
@@ -316,11 +323,17 @@ def main():
     ap.add_argument("--clip-range", type=float, default=0.2)
     ap.add_argument("--eval-freq", type=int, default=50_000,
                     help="steps between validation evaluations (best model is kept)")
+    ap.add_argument("--demand", choices=["mixed", "uniform"], default="mixed",
+                    help="training traffic: mixed scenarios (robust) or the config range only")
+    ap.add_argument("--sim", choices=["fluid", "sumo"], default="fluid",
+                    help="simulator to train and validate in (sumo: slower, closer to real traffic)")
     ap.add_argument("--output", default=os.path.join("models", "rl_agents"))
     args = ap.parse_args()
 
     cfg, log, device = bootstrap(args.config)
     seed = args.seed if args.seed is not None else cfg["training"]["seed"]
+    baseline_cfg = copy.deepcopy(cfg)          # plot baselines: config demand per stage
+    cfg["rl"]["demand_mode"] = args.demand
     modes = [m.strip() for m in args.modes.split(",") if m.strip()]
 
     rl_dir = args.output
@@ -329,6 +342,7 @@ def main():
     total_steps = args.steps
 
     log.info("Training PPO agents: %s", ", ".join(modes))
+    log.info("Simulator: %s | training demand: %s", args.sim, args.demand)
     log.info("Steps per agent: %s | seed: %d | reward: %s | yellow: %ss | curriculum: %s | "
              "imitation: %s decisions + %d DAgger rounds",
              f"{total_steps:,}", seed, cfg["rl"].get("reward_type", "shaped"),
@@ -337,7 +351,7 @@ def main():
 
     # -- Baseline evaluation (per curriculum stage, for the plot) --
     log.info("Evaluating baselines for every curriculum stage...")
-    baselines = evaluate_baselines_per_stage(cfg)
+    baselines = evaluate_baselines_per_stage(baseline_cfg)
     for name, values in baselines.items():
         log.info("  %-16s avg queue per stage: %s", name, ", ".join(f"{v:.2f}" for v in values))
 
@@ -351,6 +365,7 @@ def main():
             use_curriculum=args.curriculum, n_envs=args.n_envs, gamma=args.gamma,
             bc_steps=args.bc_steps, dagger_rounds=args.dagger_rounds, finetune_lr=args.finetune_lr,
             clip_range=args.clip_range, decision_steps=args.decision_steps, eval_freq=args.eval_freq,
+            sim=args.sim,
         )
         log.info("%s training complete.", mode)
 

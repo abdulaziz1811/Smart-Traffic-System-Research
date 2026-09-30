@@ -60,6 +60,16 @@ log = logging.getLogger("traffic")
 
 ACTION_MODES = ("cyclic", "free")
 REWARD_TYPES = ("shaped", "queue")
+
+# Traffic scenarios for demand_mode "mixed" (robust training): name ->
+# (probability, per-lane arrival range). "asymmetric": N/S lanes use the upper
+# half of the range, E/W lanes the lower half (main road x side road).
+DEMAND_SCENARIOS = {
+    "low":        (0.15, (0.01, 0.03)),
+    "medium":     (0.40, (0.02, 0.12)),
+    "rush":       (0.25, (0.10, 0.17)),
+    "asymmetric": (0.20, (0.02, 0.15)),
+}
 WAIT_SCALE = 60.0  # seconds, normalization of red_wait in the observation
 
 # Standard 4-phase cycle: phase -> green lanes
@@ -142,6 +152,10 @@ class TrafficSignalEnv(Env): # type: ignore
         # --- Traffic flow parameters ---
         self.arr_low = rc.get("arrival_rate_low", 0.02)
         self.arr_high = rc.get("arrival_rate_high", 0.15)
+        # "uniform": every lane ~ U(arr_low, arr_high)  (evaluation default)
+        # "mixed":   each episode draws a scenario from DEMAND_SCENARIOS (training)
+        self.demand_mode = rc.get("demand_mode", "uniform")
+        self.scenario = "uniform"
         self.service = rc["service_rate"]
         self.switch_pen = rc.get("switch_penalty", -5.0)
         self.reward_type = rc.get("reward_type", "shaped")
@@ -205,6 +219,20 @@ class TrafficSignalEnv(Env): # type: ignore
         self.arrivals = self.np_random.uniform(
             self.arr_low, self.arr_high, size=self.n_app
         ).astype(np.float32)
+        self.scenario = "uniform"
+        if self.demand_mode == "mixed":
+            names = list(DEMAND_SCENARIOS)
+            probs = np.array([DEMAND_SCENARIOS[n][0] for n in names])
+            self.scenario = names[int(self.np_random.choice(len(names), p=probs / probs.sum()))]
+            lo, hi = DEMAND_SCENARIOS[self.scenario][1]
+            u = self.np_random.uniform(0.0, 1.0, size=self.n_app)
+            if self.scenario == "asymmetric":
+                mid, half = (lo + hi) / 2, self.n_app // 2
+                ns = mid + u[:half] * (hi - mid)
+                ew = lo + u[half:] * (mid - lo)
+                self.arrivals = np.concatenate([ns, ew]).astype(np.float32)
+            else:
+                self.arrivals = (lo + u * (hi - lo)).astype(np.float32)
         if options.get("arrivals") is not None:
             self.arrivals = np.asarray(options["arrivals"], dtype=np.float32)
 
