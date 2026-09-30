@@ -7,18 +7,20 @@ evaluates against a fixed-timer baseline, and produces a
 training progress comparison chart.
 
 Key features:
-  - Curriculum learning: traffic difficulty increases in 3 stages
   - Cyclic agent = Discrete(2) extend/next, Free agent = Discrete(4) pick
-    any phase (previously both agents used the identical cyclic env)
-  - Baselines (fixed timer + actuated) are evaluated on the SAME traffic
-    level as each curriculum stage, so the training curve is compared
-    against a like-for-like reference
-  - Seeded PPO for reproducibility
-  - Compatible with V5 environment (22-dim observation, yellow lost time)
+    any phase
+  - Decision steps: the agent only acts when its action can matter
+    (DecisionStepWrapper skips yellow and min-green seconds)
+  - VecNormalize (observations + rewards) and 4 parallel environments;
+    the statistics are saved next to each model (<name>_vecnormalize.pkl)
+  - reward_type from config ("queue" = total delay, the evaluation metric)
+  - Optional curriculum learning (3 traffic levels); baselines are evaluated
+    on the SAME traffic level as each stage for a like-for-like plot
+  - Seeded for reproducibility; V6 environment (31-dim observation)
 
 Usage:
   python train_rl_agent.py
-  python train_rl_agent.py --steps 1000000 --seed 42
+  python train_rl_agent.py --steps 2000000 --modes free --curriculum
 """
 
 import os
@@ -31,6 +33,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from src.config import bootstrap
 from src.environment import TrafficSignalEnv
 from src.baselines import fixed_time_policy, actuated_policy
+from src.agents import make_training_env, save_agent
 
 # -- Academic plot style -----------------------------------------------
 plt.rcParams.update({
@@ -95,9 +98,9 @@ class CurriculumCallback(BaseCallback):
     """
 
     STAGES = [
-        {"arr_low": 0.03, "arr_high": 0.06, "label": "Light"},
+        {"arr_low": 0.02, "arr_high": 0.06, "label": "Light"},
         {"arr_low": 0.02, "arr_high": 0.12, "label": "Medium"},
-        {"arr_low": 0.01, "arr_high": 0.20, "label": "Heavy"},
+        {"arr_low": 0.01, "arr_high": 0.17, "label": "Heavy"},
     ]
 
     def __init__(self, total_steps, verbose=0):
@@ -113,11 +116,8 @@ class CurriculumCallback(BaseCallback):
             self.current_stage = stage_idx
             params = self.STAGES[stage_idx]
 
-            # Reach through wrappers to the actual TrafficSignalEnv
-            env = self.training_env.envs[0] # type: ignore
-            target = env.unwrapped if hasattr(env, "unwrapped") else env
-            target.arr_low = params["arr_low"]
-            target.arr_high = params["arr_high"]
+            # Applies to every (sub-process) environment from its next episode
+            self.training_env.env_method("set_arrival_range", params["arr_low"], params["arr_high"])
 
             if self.verbose > 0:
                 print(f"  [Curriculum] Stage {stage_idx + 1}/{len(self.STAGES)} "
@@ -161,29 +161,39 @@ def evaluate_baselines_per_stage(cfg):
 #  Training Pipeline
 # =====================================================================
 
-def train_agent(name, env, total_steps, rl_dir, seed=42, use_curriculum=True, verbose=1):
+def train_agent(name, cfg, action_mode, total_steps, rl_dir, seed=42, use_curriculum=False,
+                n_envs=4, gamma=0.99, verbose=1):
     """
-    Train a PPO agent with optional curriculum learning.
+    Train a PPO agent (decision steps + VecNormalize + parallel envs).
 
     Args:
         name:            model save name (without extension)
-        env:             gymnasium environment instance
-        total_steps:     total training timesteps
+        cfg:             configuration dict
+        action_mode:     "cyclic" or "free"
+        total_steps:     total training timesteps (agent decisions)
         rl_dir:          directory to save the trained model
         seed:            random seed (PPO weights, sampling and env)
         use_curriculum:  whether to apply curriculum learning
+        n_envs:          parallel environments
+        gamma:           discount factor per decision
         verbose:         curriculum callback verbosity
 
     Returns:
         (model, queue_logger)
     """
+    env = make_training_env(cfg, action_mode, n_envs=n_envs, seed=seed, gamma=gamma)
     model = PPO(
         "MlpPolicy",
         env,
         verbose=0,
         learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
+        n_steps=1024,
+        batch_size=256,
+        n_epochs=10,
+        gamma=gamma,
+        gae_lambda=0.95,
+        ent_coef=0.01,
+        policy_kwargs=dict(net_arch=[128, 128]),
         device="cpu",
         seed=seed,
     )
@@ -195,8 +205,8 @@ def train_agent(name, env, total_steps, rl_dir, seed=42, use_curriculum=True, ve
         callbacks.append(CurriculumCallback(total_steps, verbose=verbose))
 
     model.learn(total_timesteps=total_steps, callback=callbacks)
-    save_path = os.path.join(rl_dir, name)
-    model.save(save_path)
+    save_agent(model, os.path.join(rl_dir, name))
+    env.close()
 
     return model, queue_log
 
@@ -205,20 +215,24 @@ def train_agent(name, env, total_steps, rl_dir, seed=42, use_curriculum=True, ve
 #  Plot Generation
 # =====================================================================
 
-def generate_plot(baselines, logger_cyclic, logger_free, total_steps, save_path):
-    """Generate training progress comparison chart with per-stage baselines."""
+def generate_plot(baselines, logger_cyclic, logger_free, total_steps, save_path, show_stages=True):
+    """Generate training progress comparison chart with like-for-like baselines."""
     plt.figure(figsize=(12, 7))
 
     n_stages = len(CurriculumCallback.STAGES)
     bounds = [i * total_steps / n_stages for i in range(n_stages + 1)]
     ref_style = {"Fixed Timer 30s": ("#e74c3c", "--"), "Actuated": ("#8e44ad", "-.")}
 
-    # Baselines evaluated on the same traffic level as each curriculum stage
+    # Baselines evaluated on the same traffic level the agent was trained on
+    medium = [s["label"] for s in CurriculumCallback.STAGES].index("Medium")
     for name, values in baselines.items():
         color, ls = ref_style.get(name, ("#555", "--"))
-        for i, v in enumerate(values):
-            plt.hlines(v, bounds[i], bounds[i + 1], colors=color, linestyles=ls,
-                       linewidth=2.5, label=name if i == 0 else None)
+        if show_stages:
+            for i, v in enumerate(values):
+                plt.hlines(v, bounds[i], bounds[i + 1], colors=color, linestyles=ls,
+                           linewidth=2.5, label=name if i == 0 else None)
+        else:
+            plt.axhline(values[medium], color=color, linestyle=ls, linewidth=2.5, label=name)
 
     # Agent training curves
     for logger, color, label, lw in [
@@ -230,7 +244,7 @@ def generate_plot(baselines, logger_cyclic, logger_free, total_steps, save_path)
             plt.plot(x, logger.history, color=color, linewidth=lw, label=label)
 
     # Mark curriculum stage transitions
-    for i, st in enumerate(CurriculumCallback.STAGES[1:], start=1):
+    for i, st in enumerate(CurriculumCallback.STAGES[1:] if show_stages else [], start=1):
         x = bounds[i]
         plt.axvline(x=x, color="gray", linestyle=":", alpha=0.5)
         plt.text(
@@ -254,49 +268,50 @@ def generate_plot(baselines, logger_cyclic, logger_free, total_steps, save_path)
 def main():
     ap = argparse.ArgumentParser(description="Train cyclic and free PPO agents")
     ap.add_argument("--config", default="configs/config.yaml")
-    ap.add_argument("--steps", type=int, default=500_000, help="training steps per agent")
+    ap.add_argument("--steps", type=int, default=1_000_000, help="training decisions per agent")
     ap.add_argument("--seed", type=int, default=None, help="defaults to training.seed in config")
+    ap.add_argument("--modes", default="cyclic,free", help="comma-separated: cyclic,free")
+    ap.add_argument("--curriculum", action="store_true", help="3-stage traffic curriculum")
+    ap.add_argument("--gamma", type=float, default=0.99)
+    ap.add_argument("--n-envs", type=int, default=4)
     ap.add_argument("--output", default=os.path.join("models", "rl_agents"))
     args = ap.parse_args()
 
     cfg, log, device = bootstrap(args.config)
     seed = args.seed if args.seed is not None else cfg["training"]["seed"]
+    modes = [m.strip() for m in args.modes.split(",") if m.strip()]
 
     rl_dir = args.output
     os.makedirs(rl_dir, exist_ok=True)
 
     total_steps = args.steps
 
-    log.info("Starting comparative study: Fixed Timer vs Cyclic AI vs Free AI")
-    log.info("Training steps per agent: %s | seed: %d | yellow_time: %s s",
-             f"{total_steps:,}", seed, cfg["rl"].get("yellow_time", 0))
-    log.info("Curriculum learning: enabled (3 stages)")
+    log.info("Training PPO agents: %s", ", ".join(modes))
+    log.info("Decisions per agent: %s | seed: %d | reward: %s | yellow: %ss | curriculum: %s",
+             f"{total_steps:,}", seed, cfg["rl"].get("reward_type", "shaped"),
+             cfg["rl"].get("yellow_time", 0), "on" if args.curriculum else "off")
 
-    # -- Phase 1: Baseline evaluation (per curriculum stage) --
+    # -- Baseline evaluation (per curriculum stage, for the plot) --
     log.info("Evaluating baselines for every curriculum stage...")
     baselines = evaluate_baselines_per_stage(cfg)
     for name, values in baselines.items():
         log.info("  %-16s avg queue per stage: %s", name, ", ".join(f"{v:.2f}" for v in values))
 
-    # -- Phase 2: Train Cyclic AI (with curriculum) --
-    log.info("Training Cyclic AI (Discrete(2): extend / next phase)...")
-    cyclic_env = TrafficSignalEnv(cfg, action_mode="cyclic")
-    _, logger_cyclic = train_agent(
-        "cyclic_agent", cyclic_env, total_steps, rl_dir, seed=seed, use_curriculum=True
-    )
-    log.info("Cyclic AI training complete.")
+    loggers = {}
+    for mode in modes:
+        label = "Cyclic AI (Discrete(2): extend / next phase)" if mode == "cyclic" \
+            else "Free AI (Discrete(4): pick any phase)"
+        log.info("Training %s...", label)
+        _, loggers[mode] = train_agent(
+            f"{mode}_agent", cfg, mode, total_steps, rl_dir, seed=seed,
+            use_curriculum=args.curriculum, n_envs=args.n_envs, gamma=args.gamma,
+        )
+        log.info("%s training complete.", mode)
 
-    # -- Phase 3: Train Free AI (with curriculum) --
-    log.info("Training Free AI (Discrete(4): pick any phase)...")
-    free_env = TrafficSignalEnv(cfg, action_mode="free")
-    _, logger_free = train_agent(
-        "free_agent", free_env, total_steps, rl_dir, seed=seed, use_curriculum=True
-    )
-    log.info("Free AI training complete.")
-
-    # -- Phase 4: Generate comparison plot --
+    # -- Comparison plot --
     plot_path = os.path.join(rl_dir, "Training_Comparison.png")
-    generate_plot(baselines, logger_cyclic, logger_free, total_steps, plot_path)
+    generate_plot(baselines, loggers.get("cyclic", QueueLogger()), loggers.get("free", QueueLogger()),
+                  total_steps, plot_path, show_stages=args.curriculum)
     log.info("Comparison plot saved: %s", plot_path)
 
     log.info("All training complete. Models saved to: %s", rl_dir)

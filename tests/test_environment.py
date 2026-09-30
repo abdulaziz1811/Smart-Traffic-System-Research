@@ -33,9 +33,9 @@ def make_env(cfg, **rl_overrides):
 def test_observation_shape(cfg):
     env = make_env(cfg)
     obs, _ = env.reset(seed=0)
-    assert obs.shape == env.observation_space.shape == (22,)
+    assert obs.shape == env.observation_space.shape == (31,)
     obs, *_ = env.step(0)
-    assert obs.shape == (22,)
+    assert obs.shape == (31,)
 
 
 def test_min_green_is_enforced(cfg):

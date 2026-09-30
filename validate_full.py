@@ -17,7 +17,8 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 
 from src.config import bootstrap
-from src.environment import TrafficSignalEnv, infer_action_mode
+from src.environment import TrafficSignalEnv
+from src.agents import load_agent, agent_is_compatible
 from src.baselines import fixed_time_policy, actuated_policy
 
 # ══════════════════════════════════════════════════════════
@@ -44,14 +45,14 @@ SCENARIOS = {
         "arrival_high": 0.10,
     },
     "rush_hour": {
-        "desc": "Peak hour — heavy traffic",
-        "arrival_low": 0.12,
-        "arrival_high": 0.20,
+        "desc": "Peak hour — heavy traffic (near / over capacity)",
+        "arrival_low": 0.10,
+        "arrival_high": 0.17,
     },
     "asymmetric": {
         "desc": "Main road (N/S heavy) × side road (E/W light)",
         "arrival_low": 0.02,
-        "arrival_high": 0.18,
+        "arrival_high": 0.15,
         "asymmetric": True,  # N/S gets high, E/W gets low
     },
 }
@@ -116,9 +117,9 @@ DEFAULT_MODELS = [
 
 
 def load_ai_agent(cfg, model_path=None):
-    """Load the RL agent (explicit path or first default found). Returns (model, mode)."""
+    """Load the RL agent (explicit path or first default found). Returns (agent, mode)."""
     try:
-        from stable_baselines3 import PPO
+        import stable_baselines3  # noqa: F401
     except ImportError:
         print("⚠️  stable-baselines3 not installed. Running baselines only.")
         return None, None
@@ -126,16 +127,14 @@ def load_ai_agent(cfg, model_path=None):
     for path in ([model_path] if model_path else DEFAULT_MODELS):
         if not os.path.exists(path + ".zip"):
             continue
-        model = PPO.load(path, device="cpu", custom_objects={
-            "learning_rate": 0.0, "lr_schedule": lambda _: 0.0, "clip_range": lambda _: 0.2})
-        mode = infer_action_mode(model, cfg["rl"]["num_phases"])
-        env_dim = TrafficSignalEnv(cfg, action_mode=mode).observation_space.shape[0] # type: ignore
-        if model.observation_space.shape[0] != env_dim: # type: ignore
-            print(f"⚠️  {path}: obs mismatch (model={model.observation_space.shape[0]}, " # type: ignore
-                  f"env={env_dim}). Retrain with the current environment.")
+        agent = load_agent(path)
+        mode = agent.action_mode(cfg["rl"]["num_phases"])
+        if not agent_is_compatible(agent, cfg, mode):
+            print(f"⚠️  {path}: trained on an older observation layout (obs dim "
+                  f"{agent.obs_dim}). Retrain with the current environment.")
             continue
         print(f"✅ Loaded AI agent from: {path} (action mode: {mode})")
-        return model, mode
+        return agent, mode
 
     print("⚠️  No compatible trained RL agent found! Running baselines only.")
     return None, None

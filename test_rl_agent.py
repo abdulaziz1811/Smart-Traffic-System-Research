@@ -6,7 +6,7 @@ Loads a trained PPO agent and runs it through a full episode
 with a real-time dashboard showing queue states, decisions,
 and performance metrics.
 
-Compatible with V5 environment (22-dim observation). The action mode
+Compatible with V6 environment (31-dim observation). The action mode
 (cyclic / free) is detected from the model's action space.
 
 Usage:
@@ -21,9 +21,9 @@ import time
 import argparse
 
 import numpy as np
-from stable_baselines3 import PPO
 from src.config import bootstrap
-from src.environment import TrafficSignalEnv, infer_action_mode
+from src.environment import TrafficSignalEnv
+from src.agents import load_agent, agent_is_compatible
 
 
 # -- Observation parsing helpers (V4: 22-dim) --------------------------
@@ -38,7 +38,7 @@ PHASE_NAMES = [
 
 def parse_obs(obs):
     """
-    Parse the 22-dim observation vector into named components.
+    Parse the 31-dim observation vector into named components.
 
     Layout:
         [0:8]   queue lengths per lane
@@ -46,6 +46,8 @@ def parse_obs(obs):
         [12]    normalized green timer
         [13]    next phase queue density
         [14:22] queue trend per lane
+        [22:30] waiting time per lane (/60 s)
+        [30]    clearance progress
     """
     return {
         "queues": obs[0:8],
@@ -53,6 +55,7 @@ def parse_obs(obs):
         "timer": float(obs[12]),
         "next_density": float(obs[13]),
         "trend": obs[14:22],
+        "wait_s": obs[22:30] * 60.0,
     }
 
 
@@ -78,8 +81,8 @@ def render_dashboard(step, max_steps, parsed, action_str, reward, total_reward):
     print()
 
     # Queue table with trend arrows
-    print("  Lane             Queue   Trend")
-    print("  " + "-" * 38)
+    print("  Lane             Queue   Trend   Wait")
+    print("  " + "-" * 44)
     lane_names = [
         "North Straight", "North Left",
         "South Straight", "South Left",
@@ -98,7 +101,7 @@ def render_dashboard(step, max_steps, parsed, action_str, reward, total_reward):
             arrow = "(-)"
         else:
             arrow = "(=)"
-        print(f"  {name:<18s}  {int(q[i]):3d}    {arrow}")
+        print(f"  {name:<18s}  {int(q[i]):3d}    {arrow:<5s}  {int(parsed['wait_s'][i]):3d}s")
 
     print()
     print("  " + "-" * 38)
@@ -134,22 +137,18 @@ def main():
         sys.exit(1)
 
     log.info("Loading agent from: %s", model_path)
-    model = PPO.load(model_path, device="cpu", custom_objects={
-        "learning_rate": 0.0, "lr_schedule": lambda _: 0.0, "clip_range": lambda _: 0.2})
+    model = load_agent(model_path)   # applies the saved observation normalization
 
     # -- Load environment in the action mode the agent was trained for --
-    mode = infer_action_mode(model, cfg["rl"]["num_phases"])
+    mode = model.action_mode(cfg["rl"]["num_phases"])
     env = TrafficSignalEnv(cfg, action_mode=mode)
     log.info("Action mode: %s", mode)
 
     # -- Verify observation space compatibility --
-    env_obs_dim = env.observation_space.shape[0] # type: ignore
-    model_obs_dim = model.observation_space.shape[0] # type: ignore
-    if env_obs_dim != model_obs_dim:
-        print(f"WARNING: Observation dimension mismatch!")
-        print(f"  Environment expects: {env_obs_dim}")
-        print(f"  Model trained on:    {model_obs_dim}")
-        print(f"  You may need to retrain the agent with the new environment.")
+    if not agent_is_compatible(model, cfg, mode):
+        print(f"WARNING: the model was trained on an older observation layout "
+              f"(obs dim {model.obs_dim}, environment {env.observation_space.shape[0]}).") # type: ignore
+        print(f"  Retrain the agent with the current environment.")
         sys.exit(1)
 
     # -- Run episode --

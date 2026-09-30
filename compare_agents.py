@@ -11,7 +11,10 @@ Compares traffic control strategies on identical seeds (identical traffic):
   6. Final PPO      -- legacy agent, evaluated if present and compatible
 
 Each RL agent is run in the action mode it was trained for (detected
-from its action space).
+from its action space), with its saved observation normalization.
+
+--sim fluid : fast queue model used for training (default)
+--sim sumo  : SUMO microscopic simulation, closed loop (src/sumo_env.py)
 
 Outputs:
   outputs/comparison/fig1_bar_comparison.png     Bar chart (3 metrics)
@@ -24,6 +27,7 @@ Usage:
   python compare_agents.py
   python compare_agents.py --seeds 20 --steps 3600
   python compare_agents.py --agents-dir models/rl_agents
+  python compare_agents.py --sim sumo --seeds 5
 """
 
 import os
@@ -38,8 +42,11 @@ import matplotlib.gridspec as gridspec
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.config import bootstrap
-from src.environment import TrafficSignalEnv, infer_action_mode
+from src.environment import TrafficSignalEnv
 from src.baselines import fixed_time_policy, actuated_policy, longest_queue_policy
+from src.agents import load_agent, agent_is_compatible
+
+ENV_CLASS = TrafficSignalEnv   # replaced by SumoTrafficSignalEnv with --sim sumo
 
 # -- Academic plot style -----------------------------------------------
 plt.rcParams.update({
@@ -87,7 +94,7 @@ def run_episode(cfg, get_action, seed, max_steps=3600, action_mode="cyclic"):
         dict with total_reward, avg_queue, max_queue, total_served,
         switches, and full queue_history list.
     """
-    env = TrafficSignalEnv(cfg, action_mode=action_mode)
+    env = ENV_CLASS(cfg, action_mode=action_mode)
     obs, _ = env.reset(seed=seed)
 
     total_reward = 0.0
@@ -104,12 +111,15 @@ def run_episode(cfg, get_action, seed, max_steps=3600, action_mode="cyclic"):
         if terminated or truncated:
             break
 
+    if hasattr(env, "close"):
+        env.close()
     return {
         "total_reward":  float(total_reward),
         "avg_queue":     float(np.mean(queue_history)),
         "max_queue":     float(np.max(queue_history)),
         "total_served":  float(info["served"]),
         "switches":      float(info["switches"]),
+        "max_wait":      float(info.get("max_wait", 0.0)),
         "queue_history": queue_history,
     }
 
@@ -136,6 +146,7 @@ def evaluate(cfg, get_action, name, seeds, max_steps, action_mode="cyclic"):
     sv_m, sv_s = stat("total_served")
     rw_m, rw_s = stat("total_reward")
     sw_m, sw_s = stat("switches")
+    mw_m, mw_s = stat("max_wait")
     elapsed = time.time() - t0
 
     print(f"  [OK] {name:<16s} | AvgQ: {aq_m:5.2f} +/- {aq_s:<5.2f} | "
@@ -148,6 +159,7 @@ def evaluate(cfg, get_action, name, seeds, max_steps, action_mode="cyclic"):
         "served_mean": sv_m,     "served_std": sv_s,
         "reward_mean": rw_m,     "reward_std": rw_s,
         "switches_mean": sw_m,   "switches_std": sw_s,
+        "max_wait_mean": mw_m,   "max_wait_std": mw_s,
         "n_seeds": len(seeds),
         "action_mode": action_mode,
         "runs": all_runs,
@@ -336,15 +348,16 @@ def print_results(summaries):
     print(f"  RESULTS ({n} seeds)")
     print(f"{'=' * 72}")
     print(f"  {'Strategy':<16s} | {'Avg Queue':>13s} | {'Max Queue':>13s} | "
-          f"{'Served':>11s} | {'Switches':>10s}")
-    print(f"  {'-' * 16}-+-{'-' * 13}-+-{'-' * 13}-+-{'-' * 11}-+-{'-' * 10}")
+          f"{'Served':>11s} | {'Switches':>10s} | {'Max Wait s':>10s}")
+    print(f"  {'-' * 16}-+-{'-' * 13}-+-{'-' * 13}-+-{'-' * 11}-+-{'-' * 10}-+-{'-' * 10}")
 
     for s in summaries:
         print(f"  {s['name']:<16s} | "
               f"{s['avg_queue_mean']:6.2f} +/- {s['avg_queue_std']:<5.2f} | "
               f"{s['max_queue_mean']:6.1f} +/- {s['max_queue_std']:<5.1f} | "
               f"{s['served_mean']:6.0f}+/-{s['served_std']:<4.0f} | "
-              f"{s['switches_mean']:5.0f}+/-{s['switches_std']:<4.0f}")
+              f"{s['switches_mean']:5.0f}+/-{s['switches_std']:<4.0f} | "
+              f"{s['max_wait_mean']:6.0f}")
 
     # Report improvement against the traditional AND the strongest simple baseline
     actuated = next((s for s in summaries if s["name"] == "Actuated"), None)
@@ -367,16 +380,6 @@ def print_results(summaries):
 #  Main
 # =====================================================================
 
-def load_agent(path):
-    """Load a PPO agent; ignore pickled schedules (they break across Python versions)."""
-    from stable_baselines3 import PPO
-    return PPO.load(path, device="cpu", custom_objects={
-        "learning_rate": 0.0,
-        "lr_schedule": lambda _: 0.0,
-        "clip_range": lambda _: 0.2,
-    })
-
-
 def main():
     ap = argparse.ArgumentParser(description="Compare RL agents against rule-based baselines")
     ap.add_argument("--config", default="configs/config.yaml")
@@ -385,7 +388,14 @@ def main():
     ap.add_argument("--agents-dir", default="models/rl_agents",
                     help="folder containing cyclic_agent.zip / free_agent.zip")
     ap.add_argument("--output", default="outputs/comparison")
+    ap.add_argument("--sim", choices=["fluid", "sumo"], default="fluid",
+                    help="traffic simulator used for the evaluation")
     args = ap.parse_args()
+
+    global ENV_CLASS
+    if args.sim == "sumo":
+        from src.sumo_env import SumoTrafficSignalEnv
+        ENV_CLASS = SumoTrafficSignalEnv
 
     cfg, log, _ = bootstrap(args.config)
     os.makedirs(args.output, exist_ok=True)
@@ -393,7 +403,7 @@ def main():
 
     print(f"\n{'=' * 60}")
     print(f"  Agent Comparison Benchmark")
-    print(f"  Seeds: {args.seeds}  |  Steps/episode: {args.steps}  |  "
+    print(f"  Simulator: {args.sim}  |  Seeds: {args.seeds}  |  Steps/episode: {args.steps}  |  "
           f"yellow_time: {cfg['rl'].get('yellow_time', 0)}s")
     print(f"{'=' * 60}\n")
 
@@ -425,14 +435,12 @@ def main():
 
         print(f"[agent] {name}...")
         model = load_agent(path)
-        mode = infer_action_mode(model, cfg["rl"]["num_phases"])
+        mode = model.action_mode(cfg["rl"]["num_phases"])
 
         # Check observation space compatibility
-        env_dim = TrafficSignalEnv(cfg, action_mode=mode).observation_space.shape[0] # type: ignore
-        model_dim = model.observation_space.shape[0] # type: ignore
-        if env_dim != model_dim:
-            print(f"  [SKIP] {name}: obs mismatch (env={env_dim}, model={model_dim}). "
-                  f"Retrain with new environment.")
+        if not agent_is_compatible(model, cfg, mode):
+            print(f"  [SKIP] {name}: trained on an older observation layout "
+                  f"(obs dim {model.obs_dim}). Retrain with the current environment.")
             continue
 
         summaries.append(evaluate(
@@ -459,7 +467,8 @@ def main():
         d["per_seed_served"]    = [float(r["total_served"]) for r in s["runs"]] # type: ignore
         save.append(d)
 
-    save_meta = {"seeds": seeds, "steps": args.steps, "rl_config": cfg["rl"], "results": save}
+    save_meta = {"simulator": args.sim, "seeds": seeds, "steps": args.steps,
+                 "rl_config": cfg["rl"], "results": save}
     jpath = os.path.join(args.output, "results.json")
     with open(jpath, "w") as f:
         json.dump(save_meta, f, indent=2)
