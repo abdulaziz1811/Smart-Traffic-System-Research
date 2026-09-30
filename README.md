@@ -84,7 +84,8 @@ Smart-Traffic-System-Research/
 │   ├── vlm_reporter.py     # Incident reports for the operations room
 │   ├── intersection.py     # Local agent: RL control, emergency override, anomalies
 │   └── supervisor.py       # Central supervisor: green wave for emergency vehicles
-├── models/rl_agents/       # Trained PPO agents (+ *_vecnormalize.pkl statistics)
+├── models/rl_agents/       # Agents trained in the fluid model (+ *_vecnormalize.pkl statistics)
+├── models/rl_agents_sumo/  # Agents trained in SUMO (default for track_video.py)
 ├── experiments/            # Results and figures of the reported runs
 ├── tests/                  # pytest tests (environment, agents, VLM, SUMO, video controller)
 ├── train.py                # Train the DETR detector
@@ -122,6 +123,8 @@ Python 3.10+ is required. A CUDA GPU or Apple Silicon (MPS) is recommended for t
 python train_rl_agent.py --steps 600000                      # models/rl_agents/{cyclic,free}_agent
 python compare_agents.py --seeds 10                          # fast queue model
 python compare_agents.py --seeds 10 --sim sumo               # SUMO, closed loop
+python train_rl_agent.py --sim sumo --steps 300000 --output models/rl_agents_sumo   # train in SUMO (~1 h)
+python compare_agents.py --seeds 10 --sim sumo --agents-dir models/rl_agents_sumo
 python validate_full.py --seeds 10                           # 4 traffic scenarios
 python test_rl_agent.py --model models/rl_agents/free_agent
 ```
@@ -138,7 +141,7 @@ python predict.py --image path/to/frame.jpg
 
 ```bash
 python calibrate_zones.py --video path/to/traffic.mp4        # once per camera -> config video.lane_zones
-python track_video.py --video path/to/traffic.mp4 --agent models/rl_agents/cyclic_agent
+python track_video.py --video path/to/traffic.mp4 --agent models/rl_agents_sumo/cyclic_agent
 python track_video.py --video traffic.mp4 --no-vlm --no-display --output outputs/results/annotated.mp4
 python demo_system.py
 ```
@@ -162,29 +165,33 @@ python -m pytest tests/
 | mAP@50 (detection) | 92.4% | Reported from an earlier version of the code. Re-run `validate_detection.py`: the evaluation code previously crashed during post-processing, and the "Others" class could not be learned (see 2.1). |
 | Inference speed | ~30 FPS (M2) | Not re-measured. `validate_detection.py` now synchronizes the GPU, and reports model forward time only. End-to-end FPS (decode + resize + tracking) is lower. |
 
-### 6.2. Signal control (final agents, `experiments/exp4_mixed_demand/`)
+### 6.2. Signal control (`experiments/exp4_mixed_demand/`, `experiments/exp5_sumo_training/`)
 
-Test seeds 42–51, one hour of traffic each. The average queue is in vehicles per lane; lower is better.
+Test seeds 42–51, one hour of traffic each. The average queue is in vehicles per lane; lower is better. Agents in `models/rl_agents/` were trained in the fast queue model, agents in `models/rl_agents_sumo/` in SUMO.
 
 | Strategy | Fluid model | SUMO (closed loop) | Max wait in SUMO (s) |
 |---|---|---|---|
 | Fixed timer 30 s | 6.49 | 5.81 | 102 |
 | Actuated (gap-out) | 3.39 | 4.04 | 79 |
 | Longest queue first | **3.27** | 3.93 | 146 |
-| Cyclic agent (PPO) | 3.60 | 4.61 | 135 |
-| **Free agent (PPO)** | 3.47 | **3.69** | 167 |
+| Cyclic agent, trained in fluid | 3.60 | 4.61 | 135 |
+| Free agent, trained in fluid | 3.47 | **3.69** | 167 |
+| Cyclic agent, trained in SUMO | 3.54 | 4.11 | 79 |
+| Free agent, trained in SUMO | 3.35 | 3.83 | 157 |
 
-* In **SUMO**, which the agents never saw during training, the free agent is the best controller: **36% less queue than the fixed timer**, 9% less than actuated control and 6% less than longest-queue-first.
-* In the fast queue model, the agents are within 2–10% of the rule-based controllers and about 45% better than the fixed timer.
+* In **SUMO**, both free agents beat every rule-based controller. The best one, which never saw SUMO during training, has **36% less queue than the fixed timer**, 9% less than actuated control and 6% less than longest-queue-first.
+* Training in SUMO fixed the cyclic agent's transfer gap (4.61 → 4.11): it now reproduces actuated control almost exactly. The SUMO-trained free agent is good in both simulators.
+* In the fast queue model, the agents are within 2–10% of the rule-based controllers and about 45–48% better than the fixed timer.
 * **Scenarios** (fluid model, `validate_full.py`): the agents stay at the level of the rule-based controllers in light traffic, rush hour and on an asymmetric main road. The fixed timer is 4x worse on the asymmetric road.
 
-### 6.3. What the experiments showed (`experiments/exp3_*`, `experiments/exp4_*`)
+### 6.3. What the experiments showed (`experiments/exp3_*` to `experiments/exp5_*`)
 
 1. **PPO from scratch never reached actuated control.** Imitation (behavior cloning + DAgger) of the rule-based expert reaches it. PPO fine-tuning added up to 1–3% on the training demand only.
 2. **Discounting matters.** When one agent step spanned several seconds (decision steps) but was discounted as one step, fine-tuning made agents hold green too long. With one step per second it improved them.
 3. **Training demand matters.** Agents trained on medium traffic only were the best controllers on that traffic, but collapsed at rush hour (queue 139 vs 53) and did not transfer to SUMO (6.56 vs 3.93). Training on mixed scenarios fixed both.
-4. **Model selection is needed.** Longer PPO runs drifted away from good policies, most strongly on mixed demand. The best policy on validation seeds is kept, which on mixed demand was the imitation policy.
-5. For a single isolated intersection with good queue sensing, gap-out / longest-queue rules are already near-optimal. The remaining gains for RL are more likely with coordination between intersections, imperfect sensing, or objectives beyond delay.
+4. **Model selection is needed.** Longer PPO runs drifted away from good policies, most strongly on mixed demand. The best policy on validation seeds is kept, which on mixed demand was the imitation policy, both in the fluid model and in SUMO.
+5. **Train where you evaluate.** Imitation learned in SUMO gave the best cyclic agent in SUMO and transfers back to the fluid model (54 min of training for both agents on 4 CPU cores).
+6. For a single isolated intersection with good queue sensing, gap-out / longest-queue rules are already near-optimal. The remaining gains for RL are more likely with coordination between intersections, imperfect sensing, or objectives beyond delay.
 
 **Validity note for earlier RL results.** Up to environment V4, switching phase had no cost: there was no yellow/all-red time. The trained agents learned to switch roughly every 6 s. On the same seeds, a *fixed timer with 6 s green* matched them (avg queue 2.27 vs 2.27 for the "Free" agent), and a simple actuated controller beat them (1.38). The "Cyclic" and "Free" agents were also trained on the identical `Discrete(2)` environment. The results in the `التجربه ...` folders were therefore produced with that flawed setup: experiment 1 used an even older 14-dim environment, and experiment 2 used V4.
 
@@ -192,7 +199,7 @@ Test seeds 42–51, one hour of traffic each. The average queue is in vehicles p
 
 ## 7. Future Work
 
-* Train and validate directly in SUMO (`train_rl_agent.py --sim sumo`). It is implemented but slower: about 45 min per agent on 4 CPU cores.
+* Make PPO add value beyond imitation on mixed demand: a scale-free reward (delay relative to a reference controller per scenario), or a more conservative fine-tuning schedule.
 * Multi-intersection coordination (MARL) on a SUMO corridor, where adaptive control has more to gain than at one isolated intersection.
 * Calibrate the lane zones and queue threshold on real camera footage, and measure the VLM's emergency-vehicle recall and false-alarm rate on labelled clips.
 * Deployment on edge devices (e.g. Jetson) and robustness to weather and night conditions.

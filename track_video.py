@@ -353,8 +353,9 @@ def main():
     ap = argparse.ArgumentParser(description="Video -> detection -> tracking -> RL control (+ VLM)")
     ap.add_argument("--video", required=True, help="path to a traffic video file")
     ap.add_argument("--config", default="configs/config.yaml")
-    ap.add_argument("--agent", default="models/rl_agents/cyclic_agent",
-                    help="trained PPO agent path (without .zip)")
+    ap.add_argument("--agent", default="models/rl_agents_sumo/cyclic_agent",
+                    help="trained PPO agent path (without .zip); default: trained in SUMO, "
+                         "closest to real traffic dynamics")
     ap.add_argument("--no-vlm", action="store_true", help="disable the vision-language model")
     ap.add_argument("--no-loop", action="store_true", help="stop at the end of the video")
     ap.add_argument("--no-display", action="store_true", help="run headless")
