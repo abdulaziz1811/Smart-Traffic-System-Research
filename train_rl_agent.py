@@ -308,7 +308,7 @@ def generate_plot(baselines, logger_cyclic, logger_free, total_steps, save_path,
 def main():
     ap = argparse.ArgumentParser(description="Train cyclic and free PPO agents")
     ap.add_argument("--config", default="configs/config.yaml")
-    ap.add_argument("--steps", type=int, default=1_000_000, help="PPO fine-tuning steps per agent")
+    ap.add_argument("--steps", type=int, default=600_000, help="PPO fine-tuning steps per agent")
     ap.add_argument("--seed", type=int, default=None, help="defaults to training.seed in config")
     ap.add_argument("--modes", default="cyclic,free", help="comma-separated: cyclic,free")
     ap.add_argument("--curriculum", action="store_true", help="3-stage traffic curriculum")
