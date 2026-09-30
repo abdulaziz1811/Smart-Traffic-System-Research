@@ -1,0 +1,44 @@
+[2026-09-30 11:16:49] INFO — Seed: 42
+[2026-09-30 11:16:49] INFO — Device: CPU
+[2026-09-30 11:16:49] INFO — Training PPO agents: cyclic, free
+[2026-09-30 11:16:49] INFO — Steps per agent: 600,000 | seed: 42 | reward: queue | yellow: 3s | curriculum: off | imitation: 50,000 decisions + 2 DAgger rounds
+[2026-09-30 11:16:49] INFO — Evaluating baselines for every curriculum stage...
+[2026-09-30 11:16:56] INFO —   Fixed Timer 30s  avg queue per stage: 1.76, 6.60, 26.43
+[2026-09-30 11:16:56] INFO —   Actuated         avg queue per stage: 0.77, 2.28, 9.48
+[2026-09-30 11:16:56] INFO — Training Cyclic AI (Discrete(2): extend / next phase)...
+  [Imitation] cyclic: policy matches the expert on 98.8% of decisions
+  [Validation] step         0: avg queue 1.825 (best 1.825)
+  [Validation] step    50,000: avg queue 1.817 (best 1.817)
+  [Validation] step   100,000: avg queue 1.876 (best 1.817)
+  [Validation] step   150,000: avg queue 1.857 (best 1.817)
+  [Validation] step   200,000: avg queue 1.860 (best 1.817)
+  [Validation] step   250,000: avg queue 1.849 (best 1.817)
+  [Validation] step   300,000: avg queue 1.847 (best 1.817)
+  [Validation] step   350,000: avg queue 1.842 (best 1.817)
+  [Validation] step   400,000: avg queue 1.854 (best 1.817)
+  [Validation] step   450,000: avg queue 1.848 (best 1.817)
+  [Validation] step   500,000: avg queue 1.833 (best 1.817)
+  [Validation] step   550,000: avg queue 1.863 (best 1.817)
+  [Validation] step   600,000: avg queue 1.881 (best 1.817)
+  [Model selection] cyclic_agent: best validation avg queue 1.817 at step 50,000 (warm start: 1.825)
+[2026-09-30 11:28:41] INFO — cyclic training complete.
+[2026-09-30 11:28:41] INFO — Training Free AI (Discrete(4): pick any phase)...
+  [Imitation] free: policy matches the expert on 98.9% of decisions
+  [Validation] step         0: avg queue 1.734 (best 1.734)
+  [Validation] step    50,000: avg queue 1.751 (best 1.734)
+  [Validation] step   100,000: avg queue 5.370 (best 1.734)
+  [Validation] step   150,000: avg queue 4.555 (best 1.734)
+  [Validation] step   200,000: avg queue 3.068 (best 1.734)
+  [Validation] step   250,000: avg queue 2.578 (best 1.734)
+  [Validation] step   300,000: avg queue 2.292 (best 1.734)
+  [Validation] step   350,000: avg queue 2.027 (best 1.734)
+  [Validation] step   400,000: avg queue 1.845 (best 1.734)
+  [Validation] step   450,000: avg queue 1.808 (best 1.734)
+  [Validation] step   500,000: avg queue 1.777 (best 1.734)
+  [Validation] step   550,000: avg queue 1.722 (best 1.722)
+  [Validation] step   600,000: avg queue 1.746 (best 1.722)
+  [Model selection] free_agent: best validation avg queue 1.722 at step 550,000 (warm start: 1.734)
+[2026-09-30 11:40:11] INFO — free training complete.
+[2026-09-30 11:40:11] INFO — Comparison plot saved: models/rl_agents/Training_Comparison.png
+[2026-09-30 11:40:11] INFO — All training complete. Models saved to: models/rl_agents
+[2026-09-30 11:40:11] INFO — Next step: python compare_agents.py --agents-dir models/rl_agents
