@@ -46,6 +46,26 @@ class CentralSupervisor:
             target_agent.detect_ambulance(lane=expected_entry_lane)
             self.ambulance_path_plan.append((source_intersection_id, next_intersection))
 
+    def handle_ambulance_cleared(self, intersection_id):
+        """
+        Called when the ambulance has passed an intersection. Returns that
+        intersection to RL control and ends the Green Wave once no
+        intersection is still waiting for the ambulance.
+        """
+        agent = self.intersections.get(intersection_id)
+        if agent is not None:
+            agent.clear_ambulance()
+
+        self.ambulance_path_plan = [
+            (src, dst) for src, dst in self.ambulance_path_plan if dst != intersection_id
+        ]
+
+        if not any(a.emergency_mode for a in self.intersections.values()):
+            if self.green_wave_active:
+                log.info("[Supervisor] Ambulance route completed. Green Wave deactivated.")
+            self.green_wave_active = False
+            self.ambulance_path_plan = []
+
     def handle_route_correction(self, source_intersection_id, actual_intention):
         """
         Self-correcting mechanism flexibly updating the Green Wave if the ambulance

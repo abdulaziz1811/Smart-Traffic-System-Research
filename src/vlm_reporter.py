@@ -12,10 +12,19 @@ class VLMReporter:
     def __init__(self):
         self.reports_generated = 0
 
-    def check_and_report(self, supervisor) -> list[str]:
+    LANE_NAMES_EN = [
+        "N straight", "N left", "S straight", "S left",
+        "E straight", "E left", "W straight", "W left",
+    ]
+
+    def check_and_report(self, supervisor) -> list[dict]:
         """
         Scan all intersections managed by the supervisor and generate natural
         language reports if an anomaly is detected (e.g., stuck traffic or broken light).
+
+        Returns a list of dicts:
+            {"intersection": id, "lanes": [...], "text": Arabic report,
+             "summary": short English line (OpenCV cannot render Arabic)}
         """
         reports = []
         for ix_id, agent in supervisor.intersections.items():
@@ -24,7 +33,16 @@ class VLMReporter:
                 report = self.generate_anomaly_report(
                     ix_id, anomalous_lanes, agent.queues
                 )
-                reports.append(report)
+                lanes_en = ", ".join(self.LANE_NAMES_EN[l] for l in anomalous_lanes)
+                max_queue = int(max(agent.queues[l] for l in anomalous_lanes))
+                reports.append({
+                    "intersection": ix_id,
+                    "lanes": [int(l) for l in anomalous_lanes],
+                    "text": report,
+                    "summary": f"[{ix_id}] BLOCKED despite green: {lanes_en} "
+                               f"(~{max_queue} vehicles). Dispatch patrol.",
+                })
+                log.warning(report)
 
                 # Prevent spam: reset lock duration after reporting once
                 for lane in anomalous_lanes:
