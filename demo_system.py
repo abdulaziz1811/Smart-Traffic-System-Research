@@ -1,12 +1,12 @@
 import cv2
 import numpy as np
-from stable_baselines3 import PPO
-
 from src.config import bootstrap
-from src.environment import TrafficSignalEnv, infer_action_mode
+from src.environment import TrafficSignalEnv
 from src.intersection import LocalIntersectionAgent
 from src.supervisor import CentralSupervisor
 from src.vlm_reporter import VLMReporter
+from src.vlm import VLMAnalyzer
+from src.agents import load_agent, agent_is_compatible
 
 
 def get_light_color(phase, target_lanes, in_clearance=False):
@@ -142,12 +142,13 @@ def main():
     # Fallback to load model safely
     model_path = "models/rl_agents/cyclic_agent"
     try:
-        rl_model = PPO.load(model_path, device="cpu", custom_objects={
-            "learning_rate": 0.0, "lr_schedule": lambda _: 0.0, "clip_range": lambda _: 0.2})
-        action_mode = infer_action_mode(rl_model, cfg["rl"]["num_phases"])
-    except Exception:
+        rl_model = load_agent(model_path)
+        if not agent_is_compatible(rl_model, cfg):
+            raise ValueError("trained on an older observation layout")
+        action_mode = rl_model.action_mode(cfg["rl"]["num_phases"])
+    except Exception as e:
         log.warning(
-            f"PPO model '{model_path}' not found. Run train_rl_agent.py first. Running with random actions for demo."
+            f"PPO model '{model_path}' unusable ({e}). Run train_rl_agent.py first. Running with random actions for demo."
         )
         rl_model = None
         action_mode = "cyclic"
@@ -168,7 +169,10 @@ def main():
     supervisor.register_intersection(agent1)
     supervisor.register_intersection(agent2)
 
-    vlm_reporter = VLMReporter()
+    # Reports are written by Claude when API credentials are available
+    # (text-only here: the simulation has no camera), else by the template
+    vlm_reporter = VLMReporter(VLMAnalyzer(cfg))
+    log.info(f"Anomaly reporter mode: {vlm_reporter.mode}")
 
     # UI Setup
     width, height = 1000, 700
@@ -307,7 +311,7 @@ def main():
         cv2.rectangle(frame, (30, 470), (920, 670), (20, 20, 60), -1)
         cv2.putText(
             frame,
-            "VLM ANOMALY REPORTER (Live Ops Room Stream)",
+            f"VLM ANOMALY REPORTER [{vlm_reporter.mode}] (Live Ops Room Stream)",
             (40, 500),
             font,
             0.7,
@@ -347,6 +351,7 @@ def main():
         if key == 27:  # ESC
             break
 
+    vlm_reporter.close()
     cv2.destroyAllWindows()
 
 
