@@ -1,16 +1,18 @@
 import cv2
 import numpy as np
-from stable_baselines3 import PPO
-
 from src.config import bootstrap
 from src.environment import TrafficSignalEnv
 from src.intersection import LocalIntersectionAgent
 from src.supervisor import CentralSupervisor
 from src.vlm_reporter import VLMReporter
+from src.vlm import VLMAnalyzer
+from src.agents import load_agent, agent_is_compatible
 
 
-def get_light_color(phase, target_lanes):
+def get_light_color(phase, target_lanes, in_clearance=False):
     """Return color for the specific lanes given the phase."""
+    if in_clearance:
+        return (0, 0, 255)  # Yellow / all-red interval: nobody has green
     green_map = {
         0: [0, 2],  # NS Straight
         1: [1, 3],  # NS Left
@@ -31,6 +33,7 @@ def draw_intersection(img, x_offset, y_offset, agent, title):
 
     queues = agent.queues
     phase = agent.current_phase
+    in_clearance = agent.env.clearance_left > 0
 
     # Status modes
     if agent.emergency_mode:
@@ -47,7 +50,7 @@ def draw_intersection(img, x_offset, y_offset, agent, title):
     # Phase Info
     cv2.putText(
         img,
-        f"Current Phase: {phase}",
+        f"Current Phase: {phase}" + ("  (YELLOW / ALL-RED)" if in_clearance else ""),
         (x_offset, y_offset + 60),
         font,
         0.6,
@@ -56,10 +59,10 @@ def draw_intersection(img, x_offset, y_offset, agent, title):
     )
 
     # NS / EW Status
-    ns_str_color = get_light_color(phase, [0, 2])
-    ns_left_color = get_light_color(phase, [1, 3])
-    ew_str_color = get_light_color(phase, [4, 6])
-    ew_left_color = get_light_color(phase, [5, 7])
+    ns_str_color = get_light_color(phase, [0, 2], in_clearance)
+    ns_left_color = get_light_color(phase, [1, 3], in_clearance)
+    ew_str_color = get_light_color(phase, [4, 6], in_clearance)
+    ew_left_color = get_light_color(phase, [5, 7], in_clearance)
 
     cv2.putText(
         img,
@@ -112,10 +115,22 @@ def draw_intersection(img, x_offset, y_offset, agent, title):
         1,
     )
 
+    # Simulated incident (blocked lane)
+    if agent.env.blocked_lanes:
+        cv2.putText(
+            img,
+            f"INCIDENT: lane(s) {sorted(agent.env.blocked_lanes)} blocked",
+            (x_offset, y_offset + 170),
+            font,
+            0.5,
+            (0, 0, 255),
+            1,
+        )
+
     cv2.rectangle(
         img,
         (x_offset - 10, y_offset - 25),
-        (x_offset + 420, y_offset + 160),
+        (x_offset + 420, y_offset + 180),
         (100, 100, 100),
         2,
     )
@@ -125,23 +140,25 @@ def main():
     cfg, log, device = bootstrap("configs/config.yaml")
 
     # Fallback to load model safely
+    model_path = "models/rl_agents/cyclic_agent"
     try:
-        rl_model = PPO.load("models/rl_agents/final_ppo_agent")
-    except Exception:
+        rl_model = load_agent(model_path)
+        if not agent_is_compatible(rl_model, cfg):
+            raise ValueError("trained on an older observation layout")
+        action_mode = rl_model.action_mode(cfg["rl"]["num_phases"])
+    except Exception as e:
         log.warning(
-            "PPO model 'final_ppo_agent' not found. Ensure you have trained the model or the path is correct. Running with random actions for demo."
+            f"PPO model '{model_path}' unusable ({e}). Run train_rl_agent.py first. Running with random actions for demo."
         )
         rl_model = None
+        action_mode = "cyclic"
 
     # Setup the multi-agent system
-    env1 = TrafficSignalEnv(cfg)
-    env2 = TrafficSignalEnv(cfg)
+    env1 = TrafficSignalEnv(cfg, action_mode=action_mode)
+    env2 = TrafficSignalEnv(cfg, action_mode=action_mode)
 
     obs1, _ = env1.reset()
     obs2, _ = env2.reset()
-
-    # Force heavy traffic to demonstrate VLM Anomaly Reporter faster
-    env1.arrivals = np.array([0.5, 0.1, 0.5, 0.1, 0.5, 0.1, 0.5, 0.1])
 
     # Wrap with our new LocalAgents
     agent1 = LocalIntersectionAgent("Main_Intersection_1", env1, rl_model)
@@ -152,13 +169,20 @@ def main():
     supervisor.register_intersection(agent1)
     supervisor.register_intersection(agent2)
 
-    vlm_reporter = VLMReporter()
+    # Reports are written by Claude when API credentials are available
+    # (text-only here: the simulation has no camera), else by the template
+    vlm_reporter = VLMReporter(VLMAnalyzer(cfg))
+    log.info(f"Anomaly reporter mode: {vlm_reporter.mode}")
 
     # UI Setup
     width, height = 1000, 700
 
     sim_step = 0
     active_reports: list[str] = []
+
+    # Simulated incident used to demonstrate the anomaly reporter:
+    # a broken-down vehicle blocks East straight (lane 4) at intersection 1
+    incident_lane, incident_start, incident_end = 4, 300, 700
 
     log.info("Starting Full Architecture Demo...")
 
@@ -176,11 +200,19 @@ def main():
 
         # Step 150: Ambulance passes Int 1
         if sim_step == 150:
-            agent1.clear_ambulance()
+            supervisor.handle_ambulance_cleared(agent1.id)
 
         # Step 250: Ambulance passes Int 2 (which was pre-emptively on Green Wave)
         if sim_step == 250:
-            agent2.clear_ambulance()
+            supervisor.handle_ambulance_cleared(agent2.id)
+
+        # Incident at Int 1: lane gets green but nobody can move
+        if sim_step == incident_start:
+            env1.blocked_lanes.add(incident_lane)
+            log.warning(f"[Scenario] Incident: lane {incident_lane} blocked at {agent1.id}")
+        if sim_step == incident_end:
+            env1.blocked_lanes.discard(incident_lane)
+            log.info(f"[Scenario] Incident cleared at {agent1.id}")
 
         # 1. RL Agent decisions
         if rl_model:
@@ -198,16 +230,22 @@ def main():
                 else agent2.get_action(obs2)
             )
 
-        # 2. Step Environments
-        obs1, _, _, _, _ = agent1.step(action1)
-        obs2, _, _, _, _ = agent2.step(action2)
+        # 2. Step Environments (start a new episode when one ends)
+        obs1, _, done1, trunc1, _ = agent1.step(action1)
+        obs2, _, done2, trunc2, _ = agent2.step(action2)
+        if done1 or trunc1:
+            obs1, _ = env1.reset()
+        if done2 or trunc2:
+            obs2, _ = env2.reset()
 
         # 3. Check VLM Anomalies
         # We only check every 10 steps to simulate periodic scanning
         if sim_step % 10 == 0:
             new_reports = vlm_reporter.check_and_report(supervisor)
             if new_reports:
-                active_reports.extend(new_reports)
+                # The Arabic report goes to the log; OpenCV fonts cannot render
+                # Arabic, so the on-screen panel shows the English summary.
+                active_reports.extend(r["summary"] for r in new_reports)
                 # Keep only last 2 reports to avoid clutter
                 while len(active_reports) > 2:
                     active_reports.pop(0)
@@ -273,7 +311,7 @@ def main():
         cv2.rectangle(frame, (30, 470), (920, 670), (20, 20, 60), -1)
         cv2.putText(
             frame,
-            "VLM ANOMALY REPORTER (Live Ops Room Stream)",
+            f"VLM ANOMALY REPORTER [{vlm_reporter.mode}] (Live Ops Room Stream)",
             (40, 500),
             font,
             0.7,
@@ -283,8 +321,15 @@ def main():
 
         y_rep = 530
         for i, rep in enumerate(active_reports):
-            # Split the multi-line string report
-            lines = rep.split("\n")
+            # Wrap long summaries to fit the panel
+            words, lines, cur = rep.split(), [], ""
+            for w in words:
+                if len(cur) + len(w) + 1 > 80:
+                    lines.append(cur)
+                    cur = w
+                else:
+                    cur = f"{cur} {w}".strip()
+            lines.append(cur)
             for line in lines:
                 if line.strip():
                     cv2.putText(
@@ -306,6 +351,7 @@ def main():
         if key == 27:  # ESC
             break
 
+    vlm_reporter.close()
     cv2.destroyAllWindows()
 
 

@@ -12,6 +12,8 @@ import numpy as np
 from PIL import Image
 from transformers import DetrImageProcessor, DetrForObjectDetection
 
+from src.config import get_categories
+
 # Initialize logger
 log = logging.getLogger("traffic")
 
@@ -115,10 +117,8 @@ def build_detector(cfg, device, checkpoint=None):
     # We prioritize 'pretrained_model' key, default to 'facebook/detr-resnet-50'
     model_name = cfg["model"].get("pretrained_model", "facebook/detr-resnet-50")
     
-    # 2. Extract Dataset Info
-    id2label = {int(k): v for k, v in cfg["dataset"]["id2label"].items()}
-    label2id = {v: k for k, v in id2label.items()}
-    num_classes = len(id2label)
+    # 2. Extract Dataset Info (contiguous 0-indexed labels, see config.get_categories)
+    _, id2label, label2id, num_classes = get_categories(cfg)
 
     log.info(f"Building detector from base: {model_name}")
 

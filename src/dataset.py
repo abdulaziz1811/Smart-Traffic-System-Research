@@ -9,7 +9,7 @@ Dataset: Preparation · Loading · Augmentation
    If val.json/test.json don't exist, only train_loader is returned.
 """
 
-import os, json, random, logging
+import os, json, copy, random, logging
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from functools import partial
@@ -22,6 +22,8 @@ from torchvision.datasets import CocoDetection
 from transformers import DetrImageProcessor
 from PIL import Image
 from tqdm import tqdm
+
+from src.config import category_to_label_map
 
 log = logging.getLogger("traffic")
 
@@ -142,18 +144,21 @@ def convert_detrac(cfg: dict, verify_images: bool = False):
 # ════════════════════════════════════════════════════════════
 
 class Augmentation:
+    """
+    Reads the `augmentation` section of config.yaml:
+        horizontal_flip:      flip probability (0 disables)
+        brightness_contrast:  ColorJitter strength for brightness/contrast (0 disables)
+    Expects `target["annotations"]` to be a private copy (boxes are edited in place).
+    """
     def __init__(self, cfg, training=True):
         aug = cfg.get("augmentation", {}); self.training = training
-        self.flip = aug.get("horizontal_flip", False) and training
-        self.flip_p = aug.get("flip_prob", 0.5)
-        cj = aug.get("color_jitter", {})
-        self.jitter = (T.ColorJitter(cj.get("brightness",0), cj.get("contrast",0),
-                                     cj.get("saturation",0), cj.get("hue",0))
-                       if cj.get("enabled") and training else None)
+        self.flip_p = float(aug.get("horizontal_flip", 0.0)) if training else 0.0
+        bc = float(aug.get("brightness_contrast", 0.0))
+        self.jitter = T.ColorJitter(brightness=bc, contrast=bc) if bc > 0 and training else None
 
     def __call__(self, image, target):
         if self.jitter: image = self.jitter(image)
-        if self.flip and torch.rand(1).item() < self.flip_p:
+        if self.flip_p > 0 and torch.rand(1).item() < self.flip_p:
             image = image.transpose(Image.FLIP_LEFT_RIGHT) # type: ignore
             w = image.width
             for a in target.get("annotations", []):
@@ -166,13 +171,23 @@ class Augmentation:
 # ════════════════════════════════════════════════════════════
 
 class DetrDataset(CocoDetection):
-    def __init__(self, img_dir, ann_file, processor, aug=None):
+    """
+    COCO dataset for DETR. `cat2label` maps COCO category ids to the model's
+    contiguous label ids (see config.category_to_label_map).
+    """
+    def __init__(self, img_dir, ann_file, processor, aug=None, cat2label=None):
         super(DetrDataset, self).__init__(img_dir, ann_file)  # type: ignore
-        self.processor = processor; self.aug = aug
+        self.processor = processor; self.aug = aug; self.cat2label = cat2label
 
     def __getitem__(self, idx): # type: ignore
-        img, target = super().__getitem__(idx)
-        target = {"image_id": self.ids[idx], "annotations": target}
+        img, anns = super().__getitem__(idx)
+        # CocoDetection returns the cached annotation dicts themselves:
+        # copy them so augmentation never corrupts the cache across epochs
+        anns = copy.deepcopy(anns)
+        if self.cat2label is not None:
+            anns = [a for a in anns if a["category_id"] in self.cat2label]
+            for a in anns: a["category_id"] = self.cat2label[a["category_id"]]
+        target = {"image_id": self.ids[idx], "annotations": anns}
         if self.aug: img, target = self.aug(img, target)
         enc = self.processor(images=img, annotations=target, return_tensors="pt")
         return {"pixel_values": enc["pixel_values"].squeeze(0), "labels": enc["labels"][0]}
@@ -206,16 +221,23 @@ def get_processor(cfg):
     )
 
 
-def get_dataloaders(cfg, processor=None):
-    """Returns (train_loader, val_loader|None, test_loader|None)."""
+def get_dataloaders(cfg, processor=None, label2id=None):
+    """
+    Returns (train_loader, val_loader|None, test_loader|None).
+
+    label2id: the model's label mapping (model.config.label2id). Defaults to
+              the contiguous 0-indexed mapping from config.get_categories.
+    """
     if processor is None: processor = get_processor(cfg)
     dl_cfg = cfg["training"]["dataloader"]; bs = cfg["training"]["batch_size"]
     collate = partial(_collate, processor=processor)
+    cat2label = category_to_label_map(cfg, label2id)
     loaders = []
     for split, is_train in [("train",True), ("val",False), ("test",False)]:
         ann = os.path.join(cfg["paths"]["annotations_dir"], f"{split}.json")
         if not os.path.isfile(ann): loaders.append(None); continue
-        ds = DetrDataset(cfg["paths"]["images_dir"], ann, processor, Augmentation(cfg, is_train))
+        ds = DetrDataset(cfg["paths"]["images_dir"], ann, processor,
+                         Augmentation(cfg, is_train), cat2label)
         log.info(f"{split.capitalize()}: {len(ds):,} images")
         loaders.append(DataLoader(
             ds, batch_size=bs, shuffle=is_train,

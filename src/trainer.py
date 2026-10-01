@@ -33,12 +33,11 @@ def evaluate_map(model, processor, loader, device):
         pv = batch["pixel_values"].to(device)
         pm = batch["pixel_mask"].to(device)
         out = model(pixel_values=pv, pixel_mask=pm)
-        for i, lab in enumerate(batch["labels"]):
+        # Post-process the whole batch (expects the model output object, not a dict)
+        ts = torch.stack([lab["orig_size"] for lab in batch["labels"]]).to(device)
+        batch_res = processor.post_process_object_detection(out, target_sizes=ts, threshold=0.01)
+        for lab, res in zip(batch["labels"], batch_res):
             iid += 1; orig = lab["orig_size"]
-            ts = torch.tensor([orig.tolist()]).to(device)
-            res = processor.post_process_object_detection(
-                {"logits": out.logits[i:i+1], "pred_boxes": out.pred_boxes[i:i+1]},
-                target_sizes=ts, threshold=0.01)[0]
             for sc, lb, bx in zip(res["scores"], res["labels"], res["boxes"]):
                 x1,y1,x2,y2 = bx.tolist()
                 preds.append({"image_id":iid, "category_id":lb.item(),

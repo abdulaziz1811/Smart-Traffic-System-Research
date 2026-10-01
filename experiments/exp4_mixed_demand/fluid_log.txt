@@ -1,0 +1,54 @@
+[2026-09-30 12:26:22] INFO — Seed: 42
+[2026-09-30 12:26:22] INFO — Device: CPU
+
+============================================================
+  Agent Comparison Benchmark
+  Simulator: fluid  |  Seeds: 10  |  Steps/episode: 3600  |  yellow_time: 3s
+============================================================
+
+[baseline] Fixed Timer...
+  [OK] Fixed Timer      | AvgQ:  6.49 +/- 1.51  | Served:    2106 | Reward:   -18681 | 2.8s
+[baseline] Actuated...
+  [OK] Actuated         | AvgQ:  3.39 +/- 1.02  | Served:    2150 | Reward:    -9763 | 2.4s
+[baseline] Longest Queue...
+  [OK] Longest Queue    | AvgQ:  3.27 +/- 1.00  | Served:    2151 | Reward:    -9428 | 2.5s
+[agent] Cyclic Agent...
+  [OK] Cyclic Agent     | AvgQ:  3.60 +/- 1.04  | Served:    2149 | Reward:   -10355 | 20.0s
+[agent] Free Agent...
+  [OK] Free Agent       | AvgQ:  3.47 +/- 1.10  | Served:    2152 | Reward:    -9991 | 18.2s
+  [SKIP] models/rl_agents/final_ppo_agent.zip not found
+
+========================================================================
+  RESULTS (10 seeds)
+========================================================================
+  Strategy         |     Avg Queue |     Max Queue |      Served |   Switches | Max Wait s
+  -----------------+---------------+---------------+-------------+------------+-----------
+  Fixed Timer      |   6.49 +/- 1.51  |   10.8 +/- 2.5   |   2106+/-251  |   109+/-0    |    102
+  Actuated         |   3.39 +/- 1.02  |    6.5 +/- 1.8   |   2150+/-246  |   145+/-36   |    136
+  Longest Queue    |   3.27 +/- 1.00  |    6.5 +/- 1.7   |   2151+/-244  |   145+/-36   |    184
+  Cyclic Agent     |   3.60 +/- 1.04  |    6.9 +/- 1.8   |   2149+/-246  |   141+/-34   |    131
+  Free Agent       |   3.47 +/- 1.10  |    6.9 +/- 2.0   |   2152+/-246  |   139+/-35   |    196
+
+  Improvement vs Fixed Timer:
+    Actuated         -> Queue: +47.7%  |  Served: +2.1%
+    Longest Queue    -> Queue: +49.5%  |  Served: +2.2%
+    Cyclic Agent     -> Queue: +44.6%  |  Served: +2.1%
+    Free Agent       -> Queue: +46.5%  |  Served: +2.2%
+
+  Improvement vs Actuated:
+    Fixed Timer      -> Queue: -91.4%  |  Served: -2.1%
+    Longest Queue    -> Queue: +3.4%  |  Served: +0.0%
+    Cyclic Agent     -> Queue: -6.1%  |  Served: -0.1%
+    Free Agent       -> Queue: -2.3%  |  Served: +0.1%
+
+Generating figures...
+  [Plot] experiments/exp4_mixed_demand/fluid/fig1_bar_comparison.png
+  [Plot] experiments/exp4_mixed_demand/fluid/fig2_queue_timeline.png
+  plt.tight_layout(rect=(0, 0, 1, 0.96))
+  [Plot] experiments/exp4_mixed_demand/fluid/fig3_combined_paper.png
+  [Plot] experiments/exp4_mixed_demand/fluid/fig4_box_whisker.png
+
+  Results: experiments/exp4_mixed_demand/fluid/results.json
+  Figures: experiments/exp4_mixed_demand/fluid/
+  Done.
+

@@ -1,0 +1,158 @@
+{
+  "note": "Ablation, fluid model V6 (calibrated: 0.5 veh/s, 2 s start-up loss, 3 s yellow), demand 0.02-0.12 veh/s/lane, reward 'queue', 10 evaluation seeds (42-51) x 3600 s, 300k PPO steps, training seed 0.",
+  "runs": [
+    {
+      "run": "q_free",
+      "method": "PPO from scratch, decision steps",
+      "mode": "free",
+      "ppo_steps": 300000,
+      "avg_queue": 6.33,
+      "max_wait_s": 203.5,
+      "switches": 97.8,
+      "actuated": {
+        "avg_queue": 3.39,
+        "max_wait_s": 136.0
+      },
+      "longest_queue": {
+        "avg_queue": 3.27,
+        "max_wait_s": 184.1
+      }
+    },
+    {
+      "run": "bc_ft_cyclic",
+      "method": "Imitation + PPO fine-tune, decision steps",
+      "mode": "cyclic",
+      "ppo_steps": 300000,
+      "avg_queue": 3.43,
+      "max_wait_s": 121.2,
+      "switches": 141.0,
+      "actuated": {
+        "avg_queue": 3.39,
+        "max_wait_s": 136.0
+      },
+      "longest_queue": {
+        "avg_queue": 3.27,
+        "max_wait_s": 184.1
+      }
+    },
+    {
+      "run": "bc_ft_free",
+      "method": "Imitation + PPO fine-tune, decision steps",
+      "mode": "free",
+      "ppo_steps": 300000,
+      "avg_queue": 4.12,
+      "max_wait_s": 207.5,
+      "switches": 103.1,
+      "actuated": {
+        "avg_queue": 3.39,
+        "max_wait_s": 136.0
+      },
+      "longest_queue": {
+        "avg_queue": 3.27,
+        "max_wait_s": 184.1
+      }
+    },
+    {
+      "run": "bc_only_free",
+      "method": "Imitation only (behavior cloning)",
+      "mode": "free",
+      "ppo_steps": 0,
+      "avg_queue": 3.82,
+      "max_wait_s": 191.1,
+      "switches": 152.7,
+      "actuated": {
+        "avg_queue": 3.39,
+        "max_wait_s": 136.0
+      },
+      "longest_queue": {
+        "avg_queue": 3.27,
+        "max_wait_s": 184.1
+      }
+    },
+    {
+      "run": "bc_ft_free_slow",
+      "method": "Imitation + cautious PPO (lr 3e-5, clip 0.1), decision steps",
+      "mode": "free",
+      "ppo_steps": 300000,
+      "avg_queue": 5.06,
+      "max_wait_s": 273.9,
+      "switches": 80.0,
+      "actuated": {
+        "avg_queue": 3.39,
+        "max_wait_s": 136.0
+      },
+      "longest_queue": {
+        "avg_queue": 3.27,
+        "max_wait_s": 184.1
+      }
+    },
+    {
+      "run": "dagger_only_free",
+      "method": "Imitation with 2 DAgger rounds",
+      "mode": "free",
+      "ppo_steps": 0,
+      "avg_queue": 3.3,
+      "max_wait_s": 176.6,
+      "switches": 146.0,
+      "actuated": {
+        "avg_queue": 3.39,
+        "max_wait_s": 136.0
+      },
+      "longest_queue": {
+        "avg_queue": 3.27,
+        "max_wait_s": 184.1
+      }
+    },
+    {
+      "run": "dg_ft_free_nodec",
+      "method": "DAgger + PPO fine-tune, per-second steps",
+      "mode": "free",
+      "ppo_steps": 300000,
+      "avg_queue": 3.24,
+      "max_wait_s": 167.1,
+      "switches": 155.8,
+      "actuated": {
+        "avg_queue": 3.39,
+        "max_wait_s": 136.0
+      },
+      "longest_queue": {
+        "avg_queue": 3.27,
+        "max_wait_s": 184.1
+      }
+    },
+    {
+      "run": "dg_ft_cyclic_nodec",
+      "method": "DAgger + PPO fine-tune, per-second steps",
+      "mode": "cyclic",
+      "ppo_steps": 300000,
+      "avg_queue": 3.35,
+      "max_wait_s": 129.7,
+      "switches": 148.7,
+      "actuated": {
+        "avg_queue": 3.39,
+        "max_wait_s": 136.0
+      },
+      "longest_queue": {
+        "avg_queue": 3.27,
+        "max_wait_s": 184.1
+      }
+    },
+    {
+      "run": "bc_only_cyclic",
+      "method": "Imitation only (behavior cloning)",
+      "mode": "cyclic",
+      "ppo_steps": 0,
+      "avg_queue": 4.06,
+      "max_wait_s": 162.4,
+      "switches": 131.0,
+      "actuated": {
+        "avg_queue": 3.39,
+        "max_wait_s": 136.0
+      },
+      "longest_queue": {
+        "avg_queue": 3.27,
+        "max_wait_s": 184.1
+      }
+    }
+  ]
+}

@@ -9,7 +9,7 @@ Bootstrap everything in one import:
 
 import os, sys, random, time, logging
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import yaml, numpy as np, torch
 
@@ -29,18 +29,39 @@ def ensure_dirs(cfg: dict):
         if d: os.makedirs(d, exist_ok=True)
 
 
-# ━━━━━ Categories (1-indexed ← متوافق مع النموذج المدرب) ━━
+# ━━━━━ Categories ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# COCO JSON files keep the dataset category ids (1-indexed).
+# The DETR model needs contiguous 0-indexed labels, because HF DETR uses
+# index `num_labels` as the "no object" class: with 1-indexed labels the
+# 4th class ("Others" = 4) collided with "no object" and could never be
+# predicted.
 
 def get_categories(cfg: dict) -> Tuple[Dict[str,int], Dict[int,str], Dict[str,int], int]:
     """
     Returns: (cat_map, id2label, label2id, num_classes)
-    cat_map  = {"car":1, "bus":2, "van":3, "others":4}
-    id2label = {1:"Car", 2:"Bus", 3:"Van", 4:"Others"}
+    cat_map  = {"car":1, "bus":2, "van":3, "others":4}   (COCO category ids)
+    id2label = {0:"Car", 1:"Bus", 2:"Van", 3:"Others"}   (model labels)
+    label2id = {"Car":0, "Bus":1, "Van":2, "Others":3}
     """
     cat_map = cfg["dataset"]["categories"]
-    id2label = {v: k.capitalize() for k, v in cat_map.items()}
+    names = [k for k, _ in sorted(cat_map.items(), key=lambda kv: kv[1])]
+    id2label = {i: n.capitalize() for i, n in enumerate(names)}
     label2id = {v: k for k, v in id2label.items()}
-    return cat_map, id2label, label2id, cfg["dataset"]["num_classes"]
+    return cat_map, id2label, label2id, len(id2label)
+
+
+def category_to_label_map(cfg: dict, label2id: Optional[Dict[str, int]] = None) -> Dict[int, int]:
+    """
+    Map COCO category ids -> model label ids, matched by class name.
+
+    Pass `model.config.label2id` to evaluate an already-trained model in its
+    own label space (e.g. an old model trained with 1-indexed labels).
+    """
+    cat_map = cfg["dataset"]["categories"]
+    if label2id is None:
+        _, _, label2id, _ = get_categories(cfg)
+    by_name = {str(k).lower(): int(v) for k, v in label2id.items()}
+    return {int(cid): by_name[name.lower()] for name, cid in cat_map.items() if name.lower() in by_name}
 
 
 # ━━━━━ Device ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -1,6 +1,5 @@
 import logging
 import numpy as np
-from collections import deque
 from typing import Optional
 
 log = logging.getLogger("TrafficSystem")
@@ -11,6 +10,11 @@ class LocalIntersectionAgent:
     Local intersection agent that wraps the RL model and Environment.
     Supports Emergency Override (Ambulance), Intention Prediction, and reporting anomalies.
     """
+
+    # Green seconds without any vehicle leaving before a lane is reported
+    ANOMALY_THRESHOLD = 10
+    # Ignore lanes with fewer waiting vehicles than this
+    ANOMALY_MIN_QUEUE = 3.0
 
     def __init__(self, intersection_id, env, rl_model):
         self.id = intersection_id
@@ -29,9 +33,9 @@ class LocalIntersectionAgent:
         # Phase mapping definition: Phase -> Lanes
         self.green_map = env.green_map
 
-        # Anomaly Detection tracking
+        # Anomaly Detection tracking: consecutive GREEN seconds in which a
+        # lane had vehicles waiting but none of them moved
         self.locked_queues_duration = np.zeros(self.num_lanes, dtype=int)
-        self.history_queues = deque(maxlen=5)
 
     @property
     def queues(self):
@@ -66,6 +70,7 @@ class LocalIntersectionAgent:
             self.emergency_mode = False
             self.ambulance_lane = -1
             self.ambulance_intention = None
+        self.env.hold_green = False
 
     def get_target_phase_for_lane(self, lane):
         """Find which phase turns the specified lane green."""
@@ -81,12 +86,15 @@ class LocalIntersectionAgent:
         """
         if self.emergency_mode:
             target_phase = self.get_target_phase_for_lane(self.ambulance_lane)
+            at_target = self.current_phase == target_phase
 
-            # If we are already in the target phase, extend it.
-            if self.current_phase == target_phase:
-                return 0  # Extend
-            else:
-                return 1  # Switch to next phase to cycle towards target
+            # Keep the ambulance's green beyond max_green while it is needed
+            self.env.hold_green = at_target
+
+            if self.env.action_mode == "free":
+                return target_phase  # jump straight to the ambulance's phase
+            # Cyclic order: extend if already green, otherwise advance towards it
+            return 0 if at_target else 1
 
         # Normal operation via AI Model
         action, _ = self.rl_model.predict(current_obs, deterministic=True)
@@ -94,31 +102,29 @@ class LocalIntersectionAgent:
 
     def step(self, action):
         """Execute the action in the environment and check anomalies."""
+        prev_queues = self.queues.copy()
         obs, reward, done, truncated, info = self.env.step(action)
-        self.check_anomalies()
+        self.check_anomalies(prev_queues)
         return obs, reward, done, truncated, info
 
-    def check_anomalies(self):
-        """Monitor for completely stuck traffic to warn the Central Supervisor."""
-        self.history_queues.append(self.queues.copy())
+    def check_anomalies(self, prev_queues):
+        """
+        Monitor for lanes that do not move although they have GREEN.
 
-        if len(self.history_queues) == 5:
-            # If queues haven't decreased over 5 ticks (and are high)
-            stuck = np.all(
-                np.array(self.history_queues) == self.history_queues[0], axis=0
-            )
-            high_queue = self.queues > 10
-            anomalous_lanes = np.where(stuck & high_queue)[0]
-
-            for lane in anomalous_lanes:
+        A red lane that does not move is normal, so only lanes that were
+        served in the last step are judged. With vehicles leaving at
+        ~0.6 veh/s a green lane almost always shrinks; if it keeps getting
+        green without shrinking, something (accident, broken-down vehicle,
+        faulty signal head) is blocking it.
+        """
+        for lane in self.env.last_active_lanes:
+            waiting = prev_queues[lane] >= self.ANOMALY_MIN_QUEUE
+            moved = self.queues[lane] < prev_queues[lane]
+            if waiting and not moved:
                 self.locked_queues_duration[lane] += 1
-
-            # Reset moving lanes
-            moving_lanes = np.where(~stuck)[0]
-            for lane in moving_lanes:
+            elif moved:
                 self.locked_queues_duration[lane] = 0
 
     def get_anomalies(self):
         """Return anomalous lanes which have been locked for too long."""
-        threshold = 10  # Arbitrary time steps
-        return np.where(self.locked_queues_duration > threshold)[0]
+        return np.where(self.locked_queues_duration > self.ANOMALY_THRESHOLD)[0]

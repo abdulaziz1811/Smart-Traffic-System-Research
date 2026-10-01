@@ -16,7 +16,7 @@ from datetime import datetime
 import torch
 
 # Ensure project root is in python path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.config import bootstrap
 from src.dataset import get_processor, get_dataloaders
@@ -45,16 +45,20 @@ class SafeTrainer(Trainer):
                 except OSError:
                     pass
 
-    def train_epoch(self, dataloader, epoch_idx):
+    def _train_ep(self, dataloader, epoch_idx):
+        # Overrides Trainer._train_ep (the method Trainer.fit actually calls);
+        # it was previously named train_epoch, so the backups never ran.
         self.model.train()
+        self.optim.zero_grad()
         total_loss = 0
         
         for batch_idx, batch in enumerate(dataloader):
             # 1. Standard Training Step
             pixel_values = batch["pixel_values"].to(self.device)
+            pixel_mask = batch["pixel_mask"].to(self.device)
             labels = [{k: v.to(self.device) for k, v in t.items()} for t in batch["labels"]]
 
-            outputs = self.model(pixel_values=pixel_values, labels=labels)
+            outputs = self.model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=labels)
             loss = outputs.loss
             loss = loss / self.grad_accum
             loss.backward()
@@ -64,6 +68,7 @@ class SafeTrainer(Trainer):
                 self.optim.step()
                 self.optim.zero_grad()
                 self.scheduler.step()
+                self.step += 1
 
             total_loss += loss.item() * self.grad_accum
 
@@ -88,7 +93,7 @@ class SafeTrainer(Trainer):
                 self.last_backup_time = current_time
                 self.model.train() # Ensure we stay in train mode
 
-        return total_loss / len(dataloader)
+        return total_loss / max(len(dataloader), 1)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -108,12 +113,15 @@ def main():
     if args.lr: tc["learning_rate"] = args.lr
 
     log.info(f"Initializing SafeTraining on device: {device}")
+    if args.resume:
+        log.warning("--resume restores model weights only (optimizer/scheduler/epoch restart). "
+                    "Checkpoints from before the 0-indexed label fix must not be resumed.")
 
     processor = get_processor(cfg)
-    train_ld, val_ld, test_ld = get_dataloaders(cfg, processor)
-    
-    # Build Model
+
+    # Build Model (0-indexed labels), then data loaders in the model's label space
     model = build_detector(cfg, device, checkpoint=args.resume)
+    train_ld, val_ld, test_ld = get_dataloaders(cfg, processor, label2id=model.config.label2id)
 
     # Use the new SafeTrainer
     trainer = SafeTrainer(model, processor, cfg, device, backup_interval_min=30)

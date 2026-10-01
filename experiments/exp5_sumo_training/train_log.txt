@@ -1,0 +1,33 @@
+[2026-09-30 12:46:52] INFO — Seed: 42
+[2026-09-30 12:46:52] INFO — Device: CPU
+[2026-09-30 12:46:52] INFO — Training PPO agents: cyclic, free
+[2026-09-30 12:46:52] INFO — Simulator: sumo | training demand: mixed
+[2026-09-30 12:46:52] INFO — Steps per agent: 300,000 | seed: 42 | reward: queue | yellow: 3s | curriculum: off | imitation: 50,000 decisions + 2 DAgger rounds
+[2026-09-30 12:46:52] INFO — Evaluating baselines for every curriculum stage...
+[2026-09-30 12:46:59] INFO —   Fixed Timer 30s  avg queue per stage: 1.76, 6.60, 26.43
+[2026-09-30 12:46:59] INFO —   Actuated         avg queue per stage: 0.77, 2.28, 9.48
+[2026-09-30 12:46:59] INFO — Training Cyclic AI (Discrete(2): extend / next phase)...
+  [Imitation] cyclic: policy matches the expert on 97.8% of decisions
+  [Validation] step         0: queue vs actuated 1.006 (best 1.006)
+  [Validation] step    50,000: queue vs actuated 1.196 (best 1.006)
+  [Validation] step   100,000: queue vs actuated 1.332 (best 1.006)
+  [Validation] step   150,000: queue vs actuated 1.150 (best 1.006)
+  [Validation] step   200,000: queue vs actuated 1.099 (best 1.006)
+  [Validation] step   250,000: queue vs actuated 1.046 (best 1.006)
+  [Validation] step   300,000: queue vs actuated 1.069 (best 1.006)
+  [Model selection] cyclic_agent: best validation avg queue 1.006 at step 0 (warm start: 1.006)
+[2026-09-30 13:13:49] INFO — cyclic training complete.
+[2026-09-30 13:13:49] INFO — Training Free AI (Discrete(4): pick any phase)...
+  [Imitation] free: policy matches the expert on 98.0% of decisions
+  [Validation] step         0: queue vs actuated 0.969 (best 0.969)
+  [Validation] step    50,000: queue vs actuated 1.288 (best 0.969)
+  [Validation] step   100,000: queue vs actuated 1.313 (best 0.969)
+  [Validation] step   150,000: queue vs actuated 1.264 (best 0.969)
+  [Validation] step   200,000: queue vs actuated 1.126 (best 0.969)
+  [Validation] step   250,000: queue vs actuated 1.128 (best 0.969)
+  [Validation] step   300,000: queue vs actuated 1.086 (best 0.969)
+  [Model selection] free_agent: best validation avg queue 0.969 at step 0 (warm start: 0.969)
+[2026-09-30 13:40:26] INFO — free training complete.
+[2026-09-30 13:40:27] INFO — Comparison plot saved: models/rl_agents_sumo/Training_Comparison.png
+[2026-09-30 13:40:27] INFO — All training complete. Models saved to: models/rl_agents_sumo
+[2026-09-30 13:40:27] INFO — Next step: python compare_agents.py --agents-dir models/rl_agents_sumo
